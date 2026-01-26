@@ -7,7 +7,7 @@ const PORT = process.env.PORT || 3000;
 async function start() {
     await sequelize.authenticate();
     await sequelize.sync({ alter: process.env.NODE_ENV !== "production" });
-    app.listen(PORT, "0.0.0.0", () => console.log(`Server running :${PORT}`));
+    app.listen(PORT, "127.0.0.1", () => console.log(`Server running :${PORT}`));
 }
 
 start().catch((e) => {

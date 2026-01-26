@@ -5,7 +5,7 @@ import {
     LeasingBranch,
     WaGroupLeasingBranch,
 } from "../../models/index.js";
-import {parsePagination} from "../../utils/pagination.js";
+import {parsePagination, buildMeta } from "../../utils/pagination.js";
 
 export async function list(req, res) {
     const { limit, page, offset } = parsePagination(req.query);

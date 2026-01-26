@@ -55,6 +55,9 @@ WaCommandMode.belongsTo(WaCommand, { foreignKey: "command_id", as: "command" });
 WaCommandMode.belongsTo(WaGroupMode, { foreignKey: "mode_id", as: "mode" });
 
 WaGroupLeasingBranch.belongsTo(WaGroup, { foreignKey: "group_id", as: "group" });
+WaGroup.hasMany(WaGroupLeasingBranch, { foreignKey: "group_id", as: "leasingLinks" });
+
 WaGroupLeasingBranch.belongsTo(LeasingBranch, { foreignKey: "leasing_branch_id", as: "branch" });
+LeasingBranch.hasMany(WaGroupLeasingBranch, { foreignKey: "leasing_branch_id", as: "groupLinks" })
 
 export { sequelize };
