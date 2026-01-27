@@ -61,6 +61,12 @@ export function parseFilledTemplate(textRaw) {
     return { type, data };
 }
 
+function toHp08(phone) {
+    const p = String(phone || "").replace(/[^\d]/g, "");
+    if (p.startsWith("62")) return "0" + p.slice(2);
+    return p;
+}
+
 export async function sendToNewHunter({ phone, senderId, payload }) {
     const baseURL = process.env.NEWHUNTER_API_BASE || "https://api-1.newhunter.id";
     const token = process.env.NEWHUNTER_API_TOKEN;
@@ -69,9 +75,16 @@ export async function sendToNewHunter({ phone, senderId, payload }) {
 
     const url = `${baseURL}/v1/bot/sendData`;
     const params = {
-        hp: phone,        // contoh: 6285xxxx (atau 085.. sesuai normalize kamu)
+        hp: toHp08(phone),        // contoh: 6285xxxx (atau 085.. sesuai normalize kamu)
         senderId: senderId, // chatId group
     };
+
+    console.log("[SEND DATA]", {
+        url,
+        params,
+        payload,
+        authPrefix: String(token).slice(0, 12),
+    });
 
     const res = await axios.post(url, payload, {
         params,

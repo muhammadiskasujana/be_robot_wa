@@ -52,6 +52,14 @@ async function ensureModeLeasing(group) {
     return { ok: true, mode };
 }
 
+async function ensureModeInputData(group) {
+    const mode = await WaGroupMode.findOne({ where: { key: "input_data", is_active: true } });
+    if (!mode) return { ok: false, error: "Mode input_data belum ada di DB" };
+    group.mode_id = mode.id;
+    await group.save();
+    return { ok: true, mode };
+}
+
 async function setLeasing(group, leasingCode) {
     const code = String(leasingCode || "")
         .trim()
@@ -420,6 +428,11 @@ export async function handleIncoming({ instance, webhook }) {
                 message: `✅ Data berhasil dikirim.\nRef: ${apiRes?.id || apiRes?.ref || "-"}`,
             });
         } catch (e) {
+            console.error("SEND DATA ERROR", {
+                status: e?.response?.status,
+                data: e?.response?.data,
+                message: e?.message,
+            });
             await sendText({
                 ...ctx,
                 message: `❌ Gagal kirim data ke server.\n${e?.response?.data?.error || e.message}`,
@@ -473,20 +486,41 @@ export async function handleIncoming({ instance, webhook }) {
         return;
     }
 
-    // set mode leasing
+    // set mode leasing / input data
     if (key === "set_mode") {
         if (!master) return;
-        const modeKey = (args[0] || "").toLowerCase();
-        if (modeKey !== "leasing") {
-            await sendText({ ...ctx, message: "❌ Untuk saat ini mode yang didukung: leasing\nContoh: set mode leasing" });
+
+        // args bisa ["input","data"] atau ["leasing"]
+        const raw = [args[0], args[1]].filter(Boolean).join(" ").toLowerCase().trim();
+
+        if (raw === "leasing") {
+            const r = await ensureModeLeasing(group);
+            if (!r.ok) {
+                await sendText({ ...ctx, message: `❌ ${r.error}` });
+                return;
+            }
+            await sendText({ ...ctx, message: "✅ Mode group diset: leasing" });
             return;
         }
-        const r = await ensureModeLeasing(group);
-        if (!r.ok) {
-            await sendText({ ...ctx, message: `❌ ${r.error}` });
+
+        if (raw === "input data" || raw === "input_data") {
+            const r = await ensureModeInputData(group);
+            if (!r.ok) {
+                await sendText({ ...ctx, message: `❌ ${r.error}` });
+                return;
+            }
+            await sendText({ ...ctx, message: "✅ Mode group diset: input data" });
             return;
         }
-        await sendText({ ...ctx, message: "✅ Mode group diset: leasing" });
+
+        await sendText({
+            ...ctx,
+            message:
+                "❌ Mode tidak dikenal.\n" +
+                "Mode yang didukung:\n" +
+                "- set mode leasing\n" +
+                "- set mode input data",
+        });
         return;
     }
 
