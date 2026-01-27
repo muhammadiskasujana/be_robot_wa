@@ -75,12 +75,12 @@ export function parseCommandV2(text) {
         return { key: "list_branch", args: [], argsLines: lines.slice(1) };
     }
 
-    if (first === "input data motor" || first === "input data r2") {
-        return { key: "input_data_r2", args: [], argsLines: lines.slice(1) };
+    if ((first === "input data motor" || first === "input data r2") && lines.length === 1) {
+        return { key: "input_data_r2", args: [], argsLines: [] };
     }
 
-    if (first === "input data mobil" || first === "input data r4") {
-        return { key: "input_data_r4", args: [], argsLines: lines.slice(1) };
+    if ((first === "input data mobil" || first === "input data r4") && lines.length === 1) {
+        return { key: "input_data_r4", args: [], argsLines: [] };
     }
 
     if (first === "hapus nopol") {

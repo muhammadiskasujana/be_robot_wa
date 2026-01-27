@@ -369,7 +369,7 @@ export async function handleIncoming({ instance, webhook }) {
 
     // ✅ DETEKSI TEMPLATE SUBMISSION (tanpa perlu command)
     const filled = parseFilledTemplate(text);
-    if (filled && filled.type === "R2") {
+    if (filled && (filled.type === "R2" || filled.type === "R4")) {
         // pastikan mode sesuai (kamu minta: template berbeda tergantung mode)
         const mode = await WaGroupMode.findByPk(group.mode_id);
         const modeKey = mode?.key || "";
@@ -626,17 +626,28 @@ export async function handleIncoming({ instance, webhook }) {
         const type = key === "input_data_r4" ? "R4" : "R2";
         const template = buildInputTemplate({ modeKey, type });
 
+        // 1) kirim template dulu
+        const sent1 = await sendText({
+            ...ctx,
+            message: template,
+        });
+
+        const quotedId = sent1?.idMessage || sent1?.messageId || sent1?.id;
+
+        // 2) kirim instruksi sambil quote template
         await sendText({
             ...ctx,
-            message: `Silakan copy template di bawah ini, isi, lalu kirim kembali:\n\n${template}`,
+            message: "Silakan copy template di atas ini, isi, lalu kirim kembali:",
+            quotedMessageId: quotedId,
         });
+
         return;
     }
 
     // ===== hapus nopol (bulk) =====
     if (key === "delete_nopol") {
         // master-only biar aman
-        if (!master) return;
+        // if (!master) return;
 
         const nopolList = parseNopolList(args[0] || "", argsLines);
 
