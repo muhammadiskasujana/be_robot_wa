@@ -428,14 +428,32 @@ export async function handleIncoming({ instance, webhook }) {
                 message: `✅ Data berhasil dikirim.\nRef: ${apiRes?.id || apiRes?.ref || "-"}`,
             });
         } catch (e) {
+            const status = e?.response?.status;
+            const data = e?.response?.data; // bisa string atau object
+            const msg =
+                typeof data === "string"
+                    ? data
+                    : (data?.error || data?.message || "");
+
+            // ✅ kasus nopol sudah ada (anggap sukses informatif)
+            if (status === 400 && /nopol\s*sudah\s*ada/i.test(msg)) {
+                await sendText({
+                    ...ctx,
+                    message: `ℹ️ Data sudah ada di sistem (NOPOL: ${payload.nopol}).`,
+                });
+                return;
+            }
+
+            // ❌ selain itu tetap dianggap gagal
             console.error("SEND DATA ERROR", {
-                status: e?.response?.status,
-                data: e?.response?.data,
+                status,
+                data,
                 message: e?.message,
             });
+
             await sendText({
                 ...ctx,
-                message: `❌ Gagal kirim data ke server.\n${e?.response?.data?.error || e.message}`,
+                message: `❌ Gagal kirim data ke server.\n${msg || e.message}`,
             });
         }
         return;
@@ -665,26 +683,41 @@ export async function handleIncoming({ instance, webhook }) {
 
         // ambil leasing dari group (mode leasing wajib)
         const mode = await WaGroupMode.findByPk(group.mode_id);
-        const modeKey = mode?.key || "";
+        const modeKey = String(mode?.key || "").toLowerCase();
 
-        if (modeKey !== "leasing") {
-            await sendText({
-                ...ctx,
-                message: "❌ Command ini hanya boleh di mode leasing.",
-            });
+        const allowedModes = new Set(["leasing", "input_data"]);
+        if (!allowedModes.has(modeKey)) {
+            await sendText({ ...ctx, message: "❌ Command ini hanya boleh di mode leasing atau input data." });
             return;
         }
 
-        if (!group.leasing_id) {
-            await sendText({
-                ...ctx,
-                message: "❌ Group ini belum diset leasing. Jalankan: set leasing <kode>",
-            });
-            return;
+        let leasingCode = "";
+
+// MODE LEASING: pakai leasing dari group
+        if (modeKey === "leasing") {
+            if (!group.leasing_id) {
+                await sendText({ ...ctx, message: "❌ Group ini belum diset leasing. Jalankan: set leasing <kode>" });
+                return;
+            }
+            const leasing = await LeasingCompany.findByPk(group.leasing_id);
+            leasingCode = String(leasing?.code || "").toUpperCase();
         }
 
-        const leasing = await LeasingCompany.findByPk(group.leasing_id);
-        const leasingCode = String(leasing?.code || "").toUpperCase();
+// MODE INPUT_DATA: leasing wajib disebut di command
+        if (modeKey === "input_data") {
+            leasingCode = String(args[0] || "").trim().toUpperCase();
+            if (!leasingCode) {
+                await sendText({
+                    ...ctx,
+                    message:
+                        "❌ Mode input data harus menyebut leasing.\n" +
+                        "Contoh:\n" +
+                        "hapus nopol FIF\n" +
+                        "DA1234BC\nDA2345BB",
+                });
+                return;
+            }
+        }
 
         if (!leasingCode) {
             await sendText({ ...ctx, message: "❌ Leasing code tidak valid." });

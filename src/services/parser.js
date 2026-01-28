@@ -83,8 +83,9 @@ export function parseCommandV2(text) {
         return { key: "input_data_r4", args: [], argsLines: [] };
     }
 
-    if (first === "hapus nopol") {
-        return { key: "delete_nopol", args: [], argsLines: lines.slice(1) };
+    if (first.startsWith("hapus nopol")) {
+        const after = first.replace("hapus nopol", "").trim(); // bisa "fif"
+        return { key: "delete_nopol", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
     // help/ping optional

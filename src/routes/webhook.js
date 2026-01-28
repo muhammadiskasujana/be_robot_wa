@@ -16,42 +16,43 @@ router.post("/greenapi", async (req, res) => {
 
         const body = req.body;
 
-        // hanya proses pesan masuk
         if (body?.typeWebhook !== "incomingMessageReceived") {
             return res.json({ ok: true, ignored: true });
         }
 
         const idInstance = Number(body?.instanceData?.idInstance);
         const idMessage = body?.idMessage;
-
         if (!idInstance || !idMessage) return res.json({ ok: true, ignored: true, reason: "missing fields" });
 
-        // ambil instance token
-        const instance = await WaInstance.findOne({ where: { id_instance: idInstance, is_active: true } });
-        if (!instance) return res.json({ ok: true, ignored: true, reason: "unknown instance", idInstance });
+        // ✅ ACK CEPAT (paling penting)
+        res.json({ ok: true, accepted: true });
 
-        // dedup (unique index)
-        try {
-            await WaMessageLog.create({
-                id_instance: idInstance,
-                id_message: idMessage,
-                chat_id: body?.senderData?.chatId,
-                sender: body?.senderData?.sender,
-                type_webhook: body?.typeWebhook,
-                type_message: body?.messageData?.typeMessage,
-                body,
-            });
-        } catch (e) {
-            // duplicate unique => sudah diproses
-            return res.json({ ok: true, dedup: true });
-        }
+        // ==== proses di belakang (tidak block webhook) ====
+        (async () => {
+            // ambil instance token
+            const instance = await WaInstance.findOne({ where: { id_instance: idInstance, is_active: true } });
+            if (!instance) return;
 
-        await handleIncoming({ instance, webhook: body });
+            // dedup (unique index)
+            try {
+                await WaMessageLog.create({
+                    id_instance: idInstance,
+                    id_message: idMessage,
+                    chat_id: body?.senderData?.chatId,
+                    sender: body?.senderData?.sender,
+                    type_webhook: body?.typeWebhook,
+                    type_message: body?.messageData?.typeMessage,
+                    body, // kalau ini besar dan bikin lambat, lihat poin #4
+                });
+            } catch (e) {
+                return; // duplicate => stop
+            }
 
-        return res.json({ ok: true });
+            await handleIncoming({ instance, webhook: body });
+        })().catch((err) => console.error("BG webhook error:", err?.message || err));
     } catch (err) {
         console.error("Webhook error:", err?.message || err);
-        // 200 biar tidak retry spam
+        // tetap 200 agar ga retry spam
         return res.status(200).json({ ok: false, error: "handled" });
     }
 });
