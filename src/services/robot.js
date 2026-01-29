@@ -13,6 +13,43 @@ import { normalizePhone, extractText, isGroupChat, parseCommandV2 } from "./pars
 
 import { buildInputTemplate, parseFilledTemplate, sendToNewHunter } from "./inputData.js";
 import { bulkDeleteNopol } from "./deleteNopol.js"; // atau file helper baru
+import { LRUCache } from "lru-cache";
+
+const cache = new LRUCache({
+    max: 500,
+    ttl: 1000 * 60, // 1 menit
+});
+
+async function isMasterPhoneCached(phone) {
+    const k = `master:${phone}`;
+    const hit = cache.get(k);
+    if (hit !== undefined) return hit;
+    const row = await WaMaster.findOne({ where: { phone_e164: phone, is_active: true } });
+    const val = !!row;
+    cache.set(k, val);
+    return val;
+}
+
+async function checkWhitelistCached(phone) {
+    const k = `wl:${phone}`;
+    const hit = cache.get(k);
+    if (hit !== undefined) return hit;
+    const row = await WaPrivateWhitelist.findOne({ where: { phone_e164: phone, is_active: true } });
+    const val = !!row;
+    cache.set(k, val);
+    return val;
+}
+
+async function getModeKeyCached(modeId) {
+    if (!modeId) return "";
+    const k = `mode:${modeId}`;
+    const hit = cache.get(k);
+    if (hit !== undefined) return hit;
+    const mode = await WaGroupMode.findByPk(modeId, { attributes: ["key"] });
+    const val = String(mode?.key || "");
+    cache.set(k, val);
+    return val;
+}
 
 // helper: master check
 async function isMasterPhone(phone) {
@@ -342,7 +379,7 @@ export async function handleIncoming({ instance, webhook }) {
 
     // ===== PRIVATE =====
     if (!isGroup) {
-        const allowed = await checkPrivateWhitelist(phone);
+        const allowed = await checkWhitelistCached(phone);
         if (!allowed) {
             await sendText({ ...ctx, message: "❌ Nomor kamu belum terdaftar (whitelist)." });
             return;
@@ -371,7 +408,7 @@ export async function handleIncoming({ instance, webhook }) {
     const filled = parseFilledTemplate(text);
     if (filled && (filled.type === "R2" || filled.type === "R4")) {
         // pastikan mode sesuai (kamu minta: template berbeda tergantung mode)
-        const mode = await WaGroupMode.findByPk(group.mode_id);
+        const mode = await getModeKeyCached(group.mode_id);
         const modeKey = mode?.key || "";
 
         const { data } = filled;
@@ -461,7 +498,7 @@ export async function handleIncoming({ instance, webhook }) {
 
     if (!key) return; // ignore chat biasa
 
-    const master = await isMasterPhone(phone);
+    const master = await isMasterPhoneCached(phone);
 
     // help boleh tampil meski bot off
     if (key === "help") {
@@ -638,7 +675,7 @@ export async function handleIncoming({ instance, webhook }) {
 
     // ===== template: input data motor/r2 =====
     if (key === "input_data_r2" || key === "input_data_r4") {
-        const mode = await WaGroupMode.findByPk(group.mode_id);
+        const mode = await getModeKeyCached(group.mode_id);
         const modeKey = mode?.key || "";
 
         const type = key === "input_data_r4" ? "R4" : "R2";
@@ -682,7 +719,7 @@ export async function handleIncoming({ instance, webhook }) {
         }
 
         // ambil leasing dari group (mode leasing wajib)
-        const mode = await WaGroupMode.findByPk(group.mode_id);
+        const mode = await getModeKeyCached(group.mode_id);
         const modeKey = String(mode?.key || "").toLowerCase();
 
         const allowedModes = new Set(["leasing", "input_data"]);

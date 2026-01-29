@@ -8,6 +8,11 @@ export default (sequelize, DataTypes) => {
         }, {
                 tableName: "leasing_branches",
                 underscored: true,
+                indexes: [
+                        { fields: ["leasing_id"] },
+                        { fields: ["leasing_id", "name"] },
+                        { fields: ["leasing_id", "code"] },
+                ],
                 hooks: {
                         beforeValidate: (row) => {
                                 if (row.code) row.code = String(row.code).trim().toUpperCase();
