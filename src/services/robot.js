@@ -13,42 +13,85 @@ import { normalizePhone, extractText, isGroupChat, parseCommandV2 } from "./pars
 
 import { buildInputTemplate, parseFilledTemplate, sendToNewHunter } from "./inputData.js";
 import { bulkDeleteNopol } from "./deleteNopol.js"; // atau file helper baru
-import { LRUCache } from "lru-cache";
+// import { LRUCache } from "lru-cache";
+//
+// const cache = new LRUCache({
+//     max: 200, ttl: 10 * 60 * 1000
+// });
 
-const cache = new LRUCache({
-    max: 500,
-    ttl: 1000 * 60, // 1 menit
-});
+import { fetchBool, fetchString, TTL, CacheKeys } from "./cacheService.js";
+
+// async function isMasterPhoneCached(phone) {
+//     const k = `master:${phone}`;
+//     const hit = cache.get(k);
+//     if (hit !== undefined) return hit;
+//     const row = await WaMaster.findOne({ where: { phone_e164: phone, is_active: true } });
+//     const val = !!row;
+//     cache.set(k, val);
+//     return val;
+// }
+//
+// async function checkWhitelistCached(phone) {
+//     const k = `wl:${phone}`;
+//     const hit = cache.get(k);
+//     if (hit !== undefined) return hit;
+//     const row = await WaPrivateWhitelist.findOne({ where: { phone_e164: phone, is_active: true } });
+//     const val = !!row;
+//     cache.set(k, val);
+//     return val;
+// }
+//
+// async function getModeKeyCached(modeId) {
+//     if (!modeId) return "";
+//     const k = `mode:${modeId}`;
+//     const hit = cache.get(k);
+//     if (hit !== undefined) return hit;
+//     const mode = await WaGroupMode.findByPk(modeId, { attributes: ["key"] });
+//     const val = String(mode?.key || "");
+//     cache.set(k, val);
+//     return val;
+// }
 
 async function isMasterPhoneCached(phone) {
-    const k = `master:${phone}`;
-    const hit = cache.get(k);
-    if (hit !== undefined) return hit;
-    const row = await WaMaster.findOne({ where: { phone_e164: phone, is_active: true } });
-    const val = !!row;
-    cache.set(k, val);
-    return val;
+    if (!phone) return false;
+    return fetchBool(
+        CacheKeys.masterPhone(phone),
+        async () => {
+            const row = await WaMaster.findOne({
+                where: { phone_e164: phone, is_active: true },
+                attributes: ["id"],
+            });
+            return !!row;
+        },
+        TTL.AUTH_SHORT
+    );
 }
 
 async function checkWhitelistCached(phone) {
-    const k = `wl:${phone}`;
-    const hit = cache.get(k);
-    if (hit !== undefined) return hit;
-    const row = await WaPrivateWhitelist.findOne({ where: { phone_e164: phone, is_active: true } });
-    const val = !!row;
-    cache.set(k, val);
-    return val;
+    if (!phone) return false;
+    return fetchBool(
+        CacheKeys.whitelistPhone(phone),
+        async () => {
+            const row = await WaPrivateWhitelist.findOne({
+                where: { phone_e164: phone, is_active: true },
+                attributes: ["id"],
+            });
+            return !!row;
+        },
+        TTL.AUTH_SHORT
+    );
 }
 
 async function getModeKeyCached(modeId) {
     if (!modeId) return "";
-    const k = `mode:${modeId}`;
-    const hit = cache.get(k);
-    if (hit !== undefined) return hit;
-    const mode = await WaGroupMode.findByPk(modeId, { attributes: ["key"] });
-    const val = String(mode?.key || "");
-    cache.set(k, val);
-    return val;
+    return fetchString(
+        CacheKeys.modeKey(modeId),
+        async () => {
+            const mode = await WaGroupMode.findByPk(modeId, { attributes: ["key"] });
+            return mode?.key || "";
+        },
+        TTL.GROUP_MODE
+    );
 }
 
 // helper: master check
@@ -379,6 +422,7 @@ export async function handleIncoming({ instance, webhook }) {
 
     // ===== PRIVATE =====
     if (!isGroup) {
+        console.log("[WA] senderJid=", senderJid, "normalized phone=", phone);
         const allowed = await checkWhitelistCached(phone);
         if (!allowed) {
             await sendText({ ...ctx, message: "❌ Nomor kamu belum terdaftar (whitelist)." });
@@ -408,8 +452,7 @@ export async function handleIncoming({ instance, webhook }) {
     const filled = parseFilledTemplate(text);
     if (filled && (filled.type === "R2" || filled.type === "R4")) {
         // pastikan mode sesuai (kamu minta: template berbeda tergantung mode)
-        const mode = await getModeKeyCached(group.mode_id);
-        const modeKey = mode?.key || "";
+        const modeKey = String(await getModeKeyCached(group.mode_id) || "").toLowerCase();
 
         const { data } = filled;
 
@@ -674,18 +717,15 @@ export async function handleIncoming({ instance, webhook }) {
     }
 
     // ===== template: input data motor/r2 =====
+    // ===== template: input data motor/r2 =====
     if (key === "input_data_r2" || key === "input_data_r4") {
-        const mode = await getModeKeyCached(group.mode_id);
-        const modeKey = mode?.key || "";
+        const modeKey = String(await getModeKeyCached(group.mode_id) || "").toLowerCase();
 
         const type = key === "input_data_r4" ? "R4" : "R2";
         const template = buildInputTemplate({ modeKey, type });
 
         // 1) kirim template dulu
-        const sent1 = await sendText({
-            ...ctx,
-            message: template,
-        });
+        const sent1 = await sendText({ ...ctx, message: template });
 
         const quotedId = sent1?.idMessage || sent1?.messageId || sent1?.id;
 
@@ -718,9 +758,7 @@ export async function handleIncoming({ instance, webhook }) {
             return;
         }
 
-        // ambil leasing dari group (mode leasing wajib)
-        const mode = await getModeKeyCached(group.mode_id);
-        const modeKey = String(mode?.key || "").toLowerCase();
+        const modeKey = String(await getModeKeyCached(group.mode_id) || "").toLowerCase();
 
         const allowedModes = new Set(["leasing", "input_data"]);
         if (!allowedModes.has(modeKey)) {

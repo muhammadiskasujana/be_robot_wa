@@ -1,8 +1,44 @@
 import { WaMaster } from "../../models/index.js";
+import { Op } from "sequelize";
 
 export async function list(req, res) {
-    const rows = await WaMaster.findAll({ order: [["created_at", "DESC"]] });
-    res.json({ ok: true, data: rows });
+    const q = String(req.query.q || "").trim();
+    const page = Math.max(parseInt(req.query.page || "1", 10) || 1, 1);
+    const limitRaw = parseInt(req.query.limit || "20", 10) || 20;
+    const limit = Math.min(Math.max(limitRaw, 1), 100); // clamp 1..100
+    const offset = (page - 1) * limit;
+
+    const where = q
+        ? {
+            [Op.or]: [
+                { phone_e164: { [Op.iLike]: `%${q}%` } },
+                { role: { [Op.iLike]: `%${q}%` } },
+            ],
+        }
+        : undefined;
+
+    const { rows, count } = await WaMaster.findAndCountAll({
+        where,
+        order: [["created_at", "DESC"]],
+        limit,
+        offset,
+    });
+
+    const totalPages = Math.max(1, Math.ceil(count / limit));
+
+    res.json({
+        ok: true,
+        data: rows,
+        meta: {
+            q,
+            page,
+            limit,
+            total: count,
+            totalPages,
+            hasPrev: page > 1,
+            hasNext: page < totalPages,
+        },
+    });
 }
 
 export async function create(req, res) {

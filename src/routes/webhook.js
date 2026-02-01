@@ -2,6 +2,23 @@ import express from "express";
 import { WaInstance, WaMessageLog } from "../models/index.js";
 import { handleIncoming } from "../services/robot.js";
 
+import { fetchJson, TTL, CacheKeys } from "../services/cacheService.js";
+
+async function getWaInstanceCached(idInstance) {
+    return fetchJson(
+        CacheKeys.waInstance(idInstance),
+        async () => {
+            const instance = await WaInstance.findOne({
+                where: { id_instance: idInstance, is_active: true },
+                attributes: ["id_instance", "api_token"],
+            });
+            return instance ? instance.toJSON() : null;
+        },
+        TTL.INSTANCE
+    );
+}
+
+
 const router = express.Router();
 
 function verifySecret(req) {
@@ -71,8 +88,10 @@ router.post("/greenapi", async (req, res) => {
         // ==== proses di belakang (tidak block webhook) ====
         (async () => {
             // ambil instance token
-            const instance = await WaInstance.findOne({ where: { id_instance: idInstance, is_active: true } });
-            if (!instance) return;
+            // const instance = await WaInstance.findOne({ where: { id_instance: idInstance, is_active: true } });
+            // if (!instance) return;
+            const instance = await getWaInstanceCached(idInstance);
+            if (!instance?.id_instance || !instance?.api_token) return;
 
             const slimBody = buildSlimWebhook(body);
 
@@ -90,7 +109,11 @@ router.post("/greenapi", async (req, res) => {
                 return; // duplicate => stop
             }
 
-            await handleIncoming({ instance, webhook: body });
+            // await handleIncoming({ instance, webhook: body });
+            await handleIncoming({
+                instance: { id_instance: instance.id_instance, api_token: instance.api_token },
+                webhook: body,
+            });
         })().catch((err) => console.error("BG webhook error:", err?.message || err));
     } catch (err) {
         console.error("Webhook error:", err?.message || err);
