@@ -15,6 +15,11 @@ import WaGroupLeasingBranchDef from "./WaGroupLeasingBranch.js";
 import AdminUserDef from "./AdminUser.js";
 import AdminRefreshTokenDef from "./AdminRefreshToken.js";
 
+// ✅ NEW: credit & policy models
+import WaCommandPolicyDef from "./WaCommandPolicy.js";
+import WaCreditWalletDef from "./WaCreditWallet.js";
+import WaCreditTransactionDef from "./WaCreditTransaction.js";
+
 const { DataTypes } = Sequelize;
 
 // define
@@ -38,6 +43,11 @@ export const LeasingBranch = LeasingBranchDef(sequelize, DataTypes);
 
 export const WaGroupLeasingBranch = WaGroupLeasingBranchDef(sequelize, DataTypes);
 
+// ✅ NEW
+export const WaCommandPolicy = WaCommandPolicyDef(sequelize, DataTypes);
+export const WaCreditWallet = WaCreditWalletDef(sequelize, DataTypes);
+export const WaCreditTransaction = WaCreditTransactionDef(sequelize, DataTypes);
+
 AdminUser.hasMany(AdminRefreshToken, { foreignKey: "user_id", as: "refreshTokens" });
 AdminRefreshToken.belongsTo(AdminUser, { foreignKey: "user_id", as: "user" });
 
@@ -59,5 +69,34 @@ WaGroup.hasMany(WaGroupLeasingBranch, { foreignKey: "group_id", as: "leasingLink
 
 WaGroupLeasingBranch.belongsTo(LeasingBranch, { foreignKey: "leasing_branch_id", as: "branch" });
 LeasingBranch.hasMany(WaGroupLeasingBranch, { foreignKey: "leasing_branch_id", as: "groupLinks" })
+
+// =====================================================================
+// ✅ NEW: CREDIT & POLICY RELATIONSHIPS (sesuai snippet kamu)
+// =====================================================================
+
+// 1) GROUP scope: WaGroup has many policies & wallets
+WaGroup.hasMany(WaCommandPolicy, { foreignKey: "group_id", as: "command_policies" });
+WaCommandPolicy.belongsTo(WaGroup, { foreignKey: "group_id", as: "group" });
+
+WaGroup.hasMany(WaCreditWallet, { foreignKey: "group_id", as: "credit_wallets" });
+WaCreditWallet.belongsTo(WaGroup, { foreignKey: "group_id", as: "group" });
+
+// 2) LEASING scope: LeasingCompany has many policies & wallets
+LeasingCompany.hasMany(WaCommandPolicy, { foreignKey: "leasing_id", as: "command_policies" });
+WaCommandPolicy.belongsTo(LeasingCompany, { foreignKey: "leasing_id", as: "leasing" });
+
+LeasingCompany.hasMany(WaCreditWallet, { foreignKey: "leasing_id", as: "credit_wallets" });
+WaCreditWallet.belongsTo(LeasingCompany, { foreignKey: "leasing_id", as: "leasing" });
+
+// 3) WaCommand relationships (policy + tx)
+WaCommand.hasMany(WaCommandPolicy, { foreignKey: "command_id", as: "policies" });
+WaCommandPolicy.belongsTo(WaCommand, { foreignKey: "command_id", as: "command" });
+
+WaCommand.hasMany(WaCreditTransaction, { foreignKey: "command_id", as: "credit_transactions" });
+WaCreditTransaction.belongsTo(WaCommand, { foreignKey: "command_id", as: "command" });
+
+// 4) Wallet -> Transactions
+WaCreditWallet.hasMany(WaCreditTransaction, { foreignKey: "wallet_id", as: "transactions" });
+WaCreditTransaction.belongsTo(WaCreditWallet, { foreignKey: "wallet_id", as: "wallet" });
 
 export { sequelize };

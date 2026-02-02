@@ -10,6 +10,8 @@ import * as Modes from "../controllers/admin/modes.controller.js";
 import * as Commands from "../controllers/admin/commands.controller.js";
 import * as Leasing from "../controllers/admin/leasing.controller.js";
 import * as Logs from "../controllers/admin/logs.controller.js";
+import * as Credit from "../controllers/admin/waCreditController.js";
+import * as Billing from "../controllers/admin/billing.controller.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -65,5 +67,54 @@ router.delete("/leasing/branches/:id", asyncWrap(Leasing.removeBranch));
 
 // Logs
 router.get("/logs/messages", asyncWrap(Logs.listMessages));
+
+// =====================
+// Credit system (Policies, Wallets, Ledger)
+// =====================
+
+// List commands (picker, reuse WaCommand)
+router.get("/credit/commands", asyncWrap(Credit.listCommands));
+
+// ---- Policies ----
+router.get("/credit/policies", asyncWrap(Credit.listPolicies));
+router.post("/credit/policies", asyncWrap(Credit.createPolicy));
+router.put("/credit/policies/:id", asyncWrap(Credit.updatePolicy));
+router.delete("/credit/policies/:id", asyncWrap(Credit.removePolicy));
+
+// ---- Wallets ----
+router.get("/credit/wallets", asyncWrap(Credit.listWallets));
+router.post("/credit/wallets", asyncWrap(Credit.createWallet));
+router.put("/credit/wallets/:id", asyncWrap(Credit.updateWallet));
+
+router.post("/credit/wallets/:id/topup", asyncWrap(Credit.topupWallet));
+router.post("/credit/wallets/:id/debit", asyncWrap(Credit.debitWallet));
+
+// ---- Ledger / Transactions ----
+router.get("/credit/ledger", asyncWrap(Credit.listLedger));
+
+// ===== Billing (Policy + Wallet + Topup) =====
+router.get("/billing/commands", asyncWrap(Billing.listCommands));
+
+// Policies
+router.get("/billing/policies", asyncWrap(Billing.listPolicies));
+router.post("/billing/policies", asyncWrap(Billing.createPolicy));
+router.put("/billing/policies/:id", asyncWrap(Billing.updatePolicy));
+router.delete("/billing/policies/:id", asyncWrap(Billing.removePolicy));
+
+// Wallets
+router.get("/billing/wallets", asyncWrap(Billing.listWallets));
+router.post("/billing/wallets", asyncWrap(Billing.createWallet));
+router.put("/billing/wallets/:id", asyncWrap(Billing.updateWallet));
+
+// Topup (admin only)
+router.post("/billing/wallets/:id/topup", asyncWrap(Billing.topupWallet));
+
+// Optional debit (admin tool)
+router.post("/billing/wallets/:id/debit", asyncWrap(Billing.debitWallet));
+
+// Ledger
+router.get("/billing/ledger", asyncWrap(Billing.listLedger));
+
+router.post("/billing/topup", asyncWrap(Billing.topupByScope));
 
 export default router;

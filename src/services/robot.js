@@ -11,8 +11,21 @@ import {
 import { sendText } from "./greenapi.js";
 import { normalizePhone, extractText, isGroupChat, parseCommandV2 } from "./parser.js";
 
-import { buildInputTemplate, parseFilledTemplate, sendToNewHunter } from "./inputData.js";
-import { bulkDeleteNopol } from "./deleteNopol.js"; // atau file helper baru
+import { buildInputTemplate, parseFilledTemplate, sendToNewHunter } from "./inputData/inputData.js";
+import { bulkDeleteNopol } from "./deleteNopol/deleteNopol.js"; // atau file helper baru
+
+import { resolvePolicy } from "./waCommandPolicyService.js";
+import { debitIfNeeded } from "./waCreditService.js";
+import { dummyCekNopol, dummyHistory, dummyRequestLokasi } from "./waDummyApis.js";
+import { checkAndDebit } from "./billingService.js";
+
+// robot.js (tambahkan import di atas)
+import { getAccessHistoryByNopol } from "./history/newhunterHistory.js";
+import { formatHistoryMessage, resolveLeasingFromItems } from "./history/historyFormatter.js";
+
+// robot.js (tambahkan import di atas)
+import { cekNopolFromApi, formatCekNopolMessage } from "./cekNopol/newhunterCekNopol.js";
+
 // import { LRUCache } from "lru-cache";
 //
 // const cache = new LRUCache({
@@ -402,6 +415,48 @@ function parseNopolList(firstArg = "", lines = []) {
     return uniq;
 }
 
+// helper normalize nopol & phone
+function normPlate(s="") {
+    return String(s).trim().toUpperCase().replace(/\s+/g, "");
+}
+function normPhone62(s="") {
+    const digits = String(s).replace(/[^\d]/g, "");
+    if (!digits) return "";
+    // kalau 08.. -> 62..
+    if (digits.startsWith("0")) return "62" + digits.slice(1);
+    // kalau sudah 62...
+    if (digits.startsWith("62")) return digits;
+    return digits; // fallback
+}
+
+async function runPaidCommand({ commandKey, group, webhook, ctx, args, replyBuilder }) {
+    const bill = await checkAndDebit({
+        commandKey,
+        group,
+        webhook,
+        ref_type: "WA_MESSAGE",
+        ref_id: webhook?.idMessage || null,
+        notes: commandKey,
+    });
+
+    if (!bill.ok) {
+        await sendText({ ...ctx, message: `❌ ${bill.error || "Gagal billing"}` });
+        return;
+    }
+
+    if (!bill.allowed) {
+        await sendText({ ...ctx, message: `❌ ${bill.error || "Tidak diizinkan"}` });
+        return;
+    }
+
+    const out = await replyBuilder(args);
+
+    const extra = bill.charged
+        ? `\n\n💳 Kredit terpakai: ${bill.credit_cost}\nSisa: ${bill.balance_after}`
+        : `\n\n✔️ *_Accessible_*`;
+
+    await sendText({ ...ctx, message: String(out || "") + extra });
+}
 
 export async function handleIncoming({ instance, webhook }) {
     const chatId = webhook?.senderData?.chatId;
@@ -819,6 +874,155 @@ export async function handleIncoming({ instance, webhook }) {
                 message: `❌ Gagal hapus nopol.\n${e?.response?.data?.error || e.message}`,
             });
         }
+        return;
+    }
+
+    // ... di dalam handleIncoming:
+    if (key === "cek_nopol") {
+        const plate = normPlate(args[0] || ""); // dari helper kamu
+        if (!plate) {
+            await sendText({ ...ctx, message: "❌ Format: cek nopol AB1234CD" });
+            return;
+        }
+
+        // Leasing group (kalau group sudah diset leasing)
+        let groupLeasingCode = "";
+        if (group.leasing_id) {
+            const leasingRow = await LeasingCompany.findByPk(group.leasing_id, { attributes: ["code"] });
+            groupLeasingCode = String(leasingRow?.code || "").trim().toUpperCase();
+        }
+
+        await runPaidCommand({
+            commandKey: "cek_nopol",
+            group,
+            webhook,
+            ctx,
+            leasingId: group.leasing_id || null,
+            groupId: group.id,
+            args: { plate },
+            replyBuilder: async ({ plate }) => {
+                const r = await cekNopolFromApi(plate);
+                if (!r?.ok) return `❌ ${r?.error || "Gagal cek nopol"}: ${plate}`;
+
+                const dataLeasingUp = String(r.leasing_code || r.leasing || "").trim().toUpperCase();
+                const groupLeasingUp = String(groupLeasingCode || "").trim().toUpperCase();
+
+                // kalau group sudah set leasing, tapi hasil leasing beda -> mismatch
+                if (groupLeasingUp && dataLeasingUp && dataLeasingUp !== groupLeasingUp) {
+                    return (
+                        `*CEK NOPOL HUNTER*\n` +
+                        `*====================*\n` +
+                        `Data ditemukan, tetapi bukan untuk leasing ini.\n` +
+                        `Leasing data: *${dataLeasingUp}*\n` +
+                        `Leasing group: *${groupLeasingUp}*`
+                    ).trim();
+                }
+
+                // sukses normal
+                return formatCekNopolMessage({
+                    data: {
+                        ...r,
+                        // leasing tampilkan apa adanya (mis. "FIF" atau "FIF 1125" kalau nanti API ubah)
+                        leasing: r.leasing || "-",
+                    },
+                    checkedByPhone: phone, // phone sudah normalizePhone(senderJid)
+                });
+            },
+        });
+
+        return;
+    }
+
+// ... di dalam handleIncoming, ganti block "history" jadi ini:
+    if (key === "history") {
+        const plate = normPlate(args[0] || "");
+        if (!plate) {
+            await sendText({ ...ctx, message: "❌ Format: history AB1234CD" });
+            return;
+        }
+
+        // Leasing group (kalau group sudah diset leasing)
+        let groupLeasingCode = "";
+        if (group.leasing_id) {
+            const leasingRow = await LeasingCompany.findByPk(group.leasing_id, { attributes: ["code"] });
+            groupLeasingCode = String(leasingRow?.code || "").trim().toUpperCase();
+        }
+
+        await runPaidCommand({
+            commandKey: "history",
+            group,
+            webhook,
+            ctx,
+            leasingId: group.leasing_id || null,
+            groupId: group.id,
+            args: { plate },
+            replyBuilder: async ({ plate }) => {
+                const r = await getAccessHistoryByNopol(plate);
+
+                if (!r?.ok) return `❌ Gagal ambil history ${plate}`;
+                const items = Array.isArray(r.items) ? r.items : [];
+                if (!items.length) {
+                    return `*HISTORY NOPOL ${plate}*\n*================*\nData tidak ditemukan.`;
+                }
+
+                const dataLeasing = resolveLeasingFromItems(items); // mis. "KREDITPLUS"
+                const dataLeasingUp = String(dataLeasing || "").toUpperCase();
+                const groupLeasingUp = String(groupLeasingCode || "").toUpperCase();
+
+                // jika group sudah set leasing, tapi hasil leasing beda -> info mismatch
+                if (groupLeasingUp && dataLeasingUp && dataLeasingUp !== groupLeasingUp) {
+                    return (
+                        `*HISTORY NOPOL ${plate}*\n` +
+                        `*================*\n` +
+                        `⚠️Data ditemukan, tetapi bukan untuk leasing ini.\n` +
+                        `Leasing data: *${dataLeasingUp}*\n` +
+                        `Leasing group: *${groupLeasingUp}*`
+                    ).trim();
+                }
+
+                // cocok / atau group belum set leasing → tampilkan normal
+                const msg = formatHistoryMessage({
+                    nopol: plate,
+                    leasing: dataLeasingUp || groupLeasingUp || "-",
+                    items,
+                    page: 1,
+                    perPage: 10,
+                });
+
+                return msg;
+            },
+        });
+
+        return;
+    }
+
+// command: request lokasi
+    if (key === "request_lokasi") {
+        const phone62 = normPhone62(args[0] || "");
+        if (!phone62 || phone62.length < 8) {
+            await sendText({ ...ctx, message: "❌ Format: request lokasi 08123456789" });
+            return;
+        }
+
+        await runPaidCommand({
+            commandKey: "request_lokasi",
+            group,
+            webhook,
+            ctx,
+            leasingId: group.leasing_id || null,
+            groupId: group.id,
+            args: { phone62 },
+            replyBuilder: async ({ phone62 }) => {
+                const r = await dummyRequestLokasi(phone62);
+                if (!r.ok) return `❌ Gagal request lokasi ${phone62}`;
+                return (
+                    `📍 REQUEST LOKASI\n` +
+                    `Target: ${r.phone}\n` +
+                    `Status: ${r.status}\n` +
+                    `${r.catatan || ""}`
+                ).trim();
+            },
+        });
         return;
     }
 

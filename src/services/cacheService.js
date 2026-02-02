@@ -18,6 +18,9 @@ export const CacheKeys = {
     whitelistPhone: (phone) => `wl:${phone}`,
     modeKey: (modeId) => `mode:${modeId}`,
     waInstance: (idInstance) => `instance:${idInstance}`,
+    cmdId: (key) => `cmd:id:${key}`,
+    policyGroup: (groupId, cmdId) => `policy:g:${groupId}:c:${cmdId}`,
+    policyLeasing: (leasingId, cmdId) => `policy:l:${leasingId}:c:${cmdId}`,
 };
 
 // ===== anti-stampede (dedupe concurrent miss) =====
@@ -53,6 +56,18 @@ export async function fetchJson(key, fetchMethod, ttl = TTL.JSON) {
     return fetchWithDedupe(key, ttl, fetchMethod);
 }
 
+export async function fetchJSON(key, getter, ttlSec) {
+    const raw = await fetchString(
+        key,
+        async () => JSON.stringify(await getter()),
+        ttlSec
+    );
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+}
+
+
+
 // ===== invalidation =====
 export function invalidateKey(key) {
     cache.delete(key);
@@ -71,4 +86,9 @@ export const CacheInvalidate = {
     waInstance: (idInstance) => invalidateKey(CacheKeys.waInstance(idInstance)),
     allModes: () => invalidateByPrefix("mode:"),
     allInstances: () => invalidateByPrefix("instance:"),
+
+    // ✅ FIX: sebelumnya del(...) tidak ada
+    cmdId: (key) => invalidateKey(CacheKeys.cmdId(key)),
+    policyGroup: (groupId, cmdId) => invalidateKey(CacheKeys.policyGroup(groupId, cmdId)),
+    policyLeasing: (leasingId, cmdId) => invalidateKey(CacheKeys.policyLeasing(leasingId, cmdId)),
 };

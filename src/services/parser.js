@@ -88,6 +88,25 @@ export function parseCommandV2(text) {
         return { key: "delete_nopol", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
+    // cek nopol AB1234CD
+    if (first.startsWith("cek nopol")) {
+        const after = first.replace("cek nopol", "").trim();
+        return { key: "cek_nopol", args: after ? [after] : [], argsLines: lines.slice(1) };
+    }
+
+
+    // history AB1234CD
+    if (first.startsWith("history")) {
+        const after = first.replace("history", "").trim();
+        return { key: "history", args: after ? [after] : [], argsLines: lines.slice(1) };
+    }
+
+    // request lokasi 08123...
+    if (first.startsWith("request lokasi")) {
+        const after = first.replace("request lokasi", "").trim();
+        return { key: "request_lokasi", args: after ? [after] : [], argsLines: lines.slice(1) };
+    }
+
     // help/ping optional
     if (first === "help") return { key: "help", args: [], argsLines: lines.slice(1) };
     if (first === "ping") return { key: "ping", args: [], argsLines: lines.slice(1) };
