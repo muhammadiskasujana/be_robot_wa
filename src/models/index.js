@@ -20,6 +20,9 @@ import WaCommandPolicyDef from "./WaCommandPolicy.js";
 import WaCreditWalletDef from "./WaCreditWallet.js";
 import WaCreditTransactionDef from "./WaCreditTransaction.js";
 
+import PtCompanyDef from "./PtCompany.js";
+import WaGroupSubscriptionDef from "./WaGroupSubscription.js";
+
 const { DataTypes } = Sequelize;
 
 // define
@@ -47,6 +50,9 @@ export const WaGroupLeasingBranch = WaGroupLeasingBranchDef(sequelize, DataTypes
 export const WaCommandPolicy = WaCommandPolicyDef(sequelize, DataTypes);
 export const WaCreditWallet = WaCreditWalletDef(sequelize, DataTypes);
 export const WaCreditTransaction = WaCreditTransactionDef(sequelize, DataTypes);
+
+export const PtCompany = PtCompanyDef(sequelize, DataTypes);
+export const WaGroupSubscription = WaGroupSubscriptionDef(sequelize, DataTypes);
 
 AdminUser.hasMany(AdminRefreshToken, { foreignKey: "user_id", as: "refreshTokens" });
 AdminRefreshToken.belongsTo(AdminUser, { foreignKey: "user_id", as: "user" });
@@ -98,5 +104,22 @@ WaCreditTransaction.belongsTo(WaCommand, { foreignKey: "command_id", as: "comman
 // 4) Wallet -> Transactions
 WaCreditWallet.hasMany(WaCreditTransaction, { foreignKey: "wallet_id", as: "transactions" });
 WaCreditTransaction.belongsTo(WaCreditWallet, { foreignKey: "wallet_id", as: "wallet" });
+
+// PT
+PtCompany.hasMany(WaGroup, { foreignKey: "pt_company_id", as: "groups" });
+WaGroup.belongsTo(PtCompany, { foreignKey: "pt_company_id", as: "pt_company" });
+
+// Subscriptions
+WaCommand.hasMany(WaGroupSubscription, { foreignKey: "command_id", as: "subscriptions" });
+WaGroupSubscription.belongsTo(WaCommand, { foreignKey: "command_id", as: "command" });
+
+WaGroup.hasMany(WaGroupSubscription, { foreignKey: "group_id", as: "subscriptions" });
+WaGroupSubscription.belongsTo(WaGroup, { foreignKey: "group_id", as: "group" });
+
+LeasingCompany.hasMany(WaGroupSubscription, { foreignKey: "leasing_id", as: "subscriptions" });
+WaGroupSubscription.belongsTo(LeasingCompany, { foreignKey: "leasing_id", as: "leasing" });
+
+PtCompany.hasMany(WaGroupSubscription, { foreignKey: "pt_company_id", as: "subscriptions" });
+WaGroupSubscription.belongsTo(PtCompany, { foreignKey: "pt_company_id", as: "pt_company" });
 
 export { sequelize };

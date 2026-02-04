@@ -7,10 +7,15 @@ export const cache = new LRUCache({
 });
 
 export const TTL = {
-    AUTH_SHORT: 2 * 60 * 1000,      // master/whitelist
-    INSTANCE: 5 * 60 * 1000,        // WaInstance token
-    GROUP_MODE: 60 * 60 * 1000,     // mode key jarang berubah
+    AUTH_SHORT: 2 * 60 * 1000,
+    INSTANCE: 5 * 60 * 1000,
+    GROUP_MODE: 60 * 60 * 1000,
     JSON: 10 * 60 * 1000,
+    GROUP_SHORT: 10 * 1000,
+    LEASING_CODE: 60 * 60 * 1000,
+
+    // ✅ optional
+    NEGATIVE_SHORT: 10 * 1000, // cache "not found" 10 detik (opsional)
 };
 
 export const CacheKeys = {
@@ -21,6 +26,8 @@ export const CacheKeys = {
     cmdId: (key) => `cmd:id:${key}`,
     policyGroup: (groupId, cmdId) => `policy:g:${groupId}:c:${cmdId}`,
     policyLeasing: (leasingId, cmdId) => `policy:l:${leasingId}:c:${cmdId}`,
+    group: (chatId) => `group:${chatId}`,
+    leasingCode: (leasingId) => `leasing:code:${leasingId}`,
 };
 
 // ===== anti-stampede (dedupe concurrent miss) =====
@@ -42,6 +49,42 @@ async function fetchWithDedupe(key, ttl, fetchMethod) {
     return p;
 }
 
+/**
+ * ✅ Advanced: cache conditional (mis. hanya cache ok:true),
+ * bisa negative cache (mis. ok:false / NOT_FOUND) dengan TTL berbeda,
+ * dan bisa skip cache sama sekali.
+ */
+export async function fetchJsonAdvanced(
+    key,
+    fetchMethod,
+    {
+        ttl = TTL.JSON,
+        shouldCache = (val) => val !== undefined, // default sama seperti lama
+        getTTL = () => ttl,                       // bisa beda TTL tergantung val
+    } = {}
+) {
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+
+    if (inflight.has(key)) return inflight.get(key);
+
+    const p = (async () => {
+        const val = await fetchMethod();
+
+        // tentukan apakah boleh cache
+        if (shouldCache(val)) {
+            const ttl2 = getTTL(val);
+            if (ttl2 && ttl2 > 0) {
+                cache.set(key, val, { ttl: ttl2 });
+            }
+        }
+        return val;
+    })().finally(() => inflight.delete(key));
+
+    inflight.set(key, p);
+    return p;
+}
+
 export async function fetchBool(key, fetchMethod, ttl = TTL.AUTH_SHORT) {
     const v = await fetchWithDedupe(key, ttl, fetchMethod);
     return !!v;
@@ -52,21 +95,16 @@ export async function fetchString(key, fetchMethod, ttl = TTL.GROUP_MODE) {
     return v == null ? "" : String(v);
 }
 
+// existing
 export async function fetchJson(key, fetchMethod, ttl = TTL.JSON) {
     return fetchWithDedupe(key, ttl, fetchMethod);
 }
 
 export async function fetchJSON(key, getter, ttlSec) {
-    const raw = await fetchString(
-        key,
-        async () => JSON.stringify(await getter()),
-        ttlSec
-    );
+    const raw = await fetchString(key, async () => JSON.stringify(await getter()), ttlSec);
     if (!raw) return null;
     try { return JSON.parse(raw); } catch { return null; }
 }
-
-
 
 // ===== invalidation =====
 export function invalidateKey(key) {
@@ -87,8 +125,10 @@ export const CacheInvalidate = {
     allModes: () => invalidateByPrefix("mode:"),
     allInstances: () => invalidateByPrefix("instance:"),
 
-    // ✅ FIX: sebelumnya del(...) tidak ada
     cmdId: (key) => invalidateKey(CacheKeys.cmdId(key)),
     policyGroup: (groupId, cmdId) => invalidateKey(CacheKeys.policyGroup(groupId, cmdId)),
     policyLeasing: (leasingId, cmdId) => invalidateKey(CacheKeys.policyLeasing(leasingId, cmdId)),
+
+    group: (chatId) => invalidateKey(CacheKeys.group(chatId)),
+    leasingCode: (leasingId) => invalidateKey(CacheKeys.leasingCode(leasingId)),
 };

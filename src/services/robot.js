@@ -6,6 +6,7 @@ import {
     LeasingCompany,
     LeasingBranch,
     WaGroupLeasingBranch,
+    PtCompany,
 } from "../models/index.js";
 
 import { sendText } from "./greenapi.js";
@@ -32,38 +33,66 @@ import { cekNopolFromApi, formatCekNopolMessage } from "./cekNopol/newhunterCekN
 //     max: 200, ttl: 10 * 60 * 1000
 // });
 
-import { fetchBool, fetchString, TTL, CacheKeys } from "./cacheService.js";
+import {fetchJson,  fetchBool, fetchString, TTL, CacheKeys, CacheInvalidate } from "./cacheService.js";
 
-// async function isMasterPhoneCached(phone) {
-//     const k = `master:${phone}`;
-//     const hit = cache.get(k);
-//     if (hit !== undefined) return hit;
-//     const row = await WaMaster.findOne({ where: { phone_e164: phone, is_active: true } });
-//     const val = !!row;
-//     cache.set(k, val);
-//     return val;
-// }
-//
-// async function checkWhitelistCached(phone) {
-//     const k = `wl:${phone}`;
-//     const hit = cache.get(k);
-//     if (hit !== undefined) return hit;
-//     const row = await WaPrivateWhitelist.findOne({ where: { phone_e164: phone, is_active: true } });
-//     const val = !!row;
-//     cache.set(k, val);
-//     return val;
-// }
-//
-// async function getModeKeyCached(modeId) {
-//     if (!modeId) return "";
-//     const k = `mode:${modeId}`;
-//     const hit = cache.get(k);
-//     if (hit !== undefined) return hit;
-//     const mode = await WaGroupMode.findByPk(modeId, { attributes: ["key"] });
-//     const val = String(mode?.key || "");
-//     cache.set(k, val);
-//     return val;
-// }
+
+async function getGroupCached(chatId, chatName) {
+    return fetchJson(
+        CacheKeys.group(chatId),
+        async () => {
+            // ambil minimal kolom yang dipakai di handler
+            const g = await WaGroup.findOne({
+                where: { chat_id: chatId },
+                attributes: [
+                    "id",
+                    "chat_id",
+                    "title",
+                    "is_bot_enabled",
+                    "mode_id",
+                    "leasing_id",
+                    "leasing_level",
+                    "leasing_branch_id",
+                    "pt_company_id",
+                ],
+            });
+
+            if (g) return g.toJSON();
+
+            const created = await WaGroup.create({
+                chat_id: chatId,
+                title: chatName || null,
+                is_bot_enabled: false,
+                notif_data_access_enabled: false,
+                mode_id: null,
+                leasing_id: null,
+                leasing_level: null,
+                leasing_branch_id: null,
+                pt_company_id: null,
+            });
+
+            return created.toJSON();
+        },
+        TTL.GROUP_SHORT
+    );
+}
+
+// helper: update group + invalidate cache
+async function updateGroup(groupId, patch) {
+    await WaGroup.update(patch, { where: { id: groupId } });
+    // invalidate by chatId (lebih gampang kalau patch caller pegang chatId)
+}
+
+async function getLeasingCodeCached(leasingId) {
+    if (!leasingId) return "";
+    return fetchString(
+        CacheKeys.leasingCode(leasingId),
+        async () => {
+            const row = await LeasingCompany.findByPk(leasingId, { attributes: ["code"] });
+            return String(row?.code || "").trim().toUpperCase();
+        },
+        TTL.LEASING_CODE
+    );
+}
 
 async function isMasterPhoneCached(phone) {
     if (!phone) return false;
@@ -145,6 +174,24 @@ async function ensureModeLeasing(group) {
     return { ok: true, mode };
 }
 
+async function ensureModePT(group) {
+    const mode = await WaGroupMode.findOne({
+        where: { key: "pt", is_active: true },
+    });
+
+    if (!mode) return { ok: false, error: "Mode PT belum ada di DB" };
+
+    group.mode_id = mode.id;
+
+    // reset leasing supaya tidak bentrok
+    group.leasing_id = null;
+    group.leasing_level = null;
+    group.leasing_branch_id = null;
+
+    await group.save();
+    return { ok: true, mode };
+}
+
 async function ensureModeInputData(group) {
     const mode = await WaGroupMode.findOne({ where: { key: "input_data", is_active: true } });
     if (!mode) return { ok: false, error: "Mode input_data belum ada di DB" };
@@ -180,6 +227,42 @@ async function setLeasing(group, leasingCode) {
 
     await group.save();
     return { ok: true, leasing, created };
+}
+
+async function unsetLeasing(group) {
+    if (!group.leasing_id) {
+        return { ok: false, error: "Group ini belum punya leasing." };
+    }
+
+    group.leasing_id = null;
+    group.leasing_level = null;
+    group.leasing_branch_id = null;
+
+    // hapus relasi cabang
+    await WaGroupLeasingBranch.destroy({
+        where: { group_id: group.id },
+    });
+
+    await group.save();
+
+    return { ok: true };
+}
+
+async function setPt(group, ptCode) {
+    const code = String(ptCode || "").trim().replace(/\s+/g, " ").toUpperCase();
+    if (!code) return { ok: false, error: "PT code kosong" };
+
+    const [pt, created] = await PtCompany.findOrCreate({
+        where: { code },
+        defaults: { code, name: code, is_active: true },
+    });
+
+    if (!pt.is_active) await pt.update({ is_active: true });
+
+    group.pt_company_id = pt.id;
+    await group.save();
+
+    return { ok: true, pt, created };
 }
 
 /**
@@ -458,6 +541,12 @@ async function runPaidCommand({ commandKey, group, webhook, ctx, args, replyBuil
     await sendText({ ...ctx, message: String(out || "") + extra });
 }
 
+const t = (label) => {
+    const start = Date.now();
+    return () => console.log(label, Date.now() - start, "ms");
+};
+
+
 export async function handleIncoming({ instance, webhook }) {
     const chatId = webhook?.senderData?.chatId;
     const senderJid = webhook?.senderData?.sender;
@@ -639,11 +728,12 @@ export async function handleIncoming({ instance, webhook }) {
         return;
     }
 
-    // set mode leasing / input data
+
+    // set mode leasing / input data / pt
     if (key === "set_mode") {
         if (!master) return;
 
-        // args bisa ["input","data"] atau ["leasing"]
+        // args bisa ["input","data"] atau ["leasing"] atau ["pt"]
         const raw = [args[0], args[1]].filter(Boolean).join(" ").toLowerCase().trim();
 
         if (raw === "leasing") {
@@ -666,13 +756,25 @@ export async function handleIncoming({ instance, webhook }) {
             return;
         }
 
+        // ✅ MODE PT
+        if (raw === "pt") {
+            const r = await ensureModePT(group);
+            if (!r.ok) {
+                await sendText({ ...ctx, message: `❌ ${r.error}` });
+                return;
+            }
+            await sendText({ ...ctx, message: "✅ Mode group diset: PT" });
+            return;
+        }
+
         await sendText({
             ...ctx,
             message:
                 "❌ Mode tidak dikenal.\n" +
                 "Mode yang didukung:\n" +
                 "- set mode leasing\n" +
-                "- set mode input data",
+                "- set mode input data\n" +
+                "- set mode pt",
         });
         return;
     }
@@ -691,6 +793,25 @@ export async function handleIncoming({ instance, webhook }) {
             message: r.created
                 ? `✅ Leasing dibuat & diset: ${r.leasing.code}`
                 : `✅ Leasing group diset: ${r.leasing.code}`,
+        });
+        return;
+    }
+
+    // unset leasing
+    if (key === "unset_leasing") {
+        if (!master) return;
+
+        const r = await unsetLeasing(group);
+        if (!r.ok) {
+            await sendText({ ...ctx, message: `❌ ${r.error}` });
+            return;
+        }
+
+        await sendText({
+            ...ctx,
+            message:
+                "✅ Leasing berhasil dihapus dari group.\n" +
+                "Level & cabang juga sudah di-reset.",
         });
         return;
     }
@@ -1023,6 +1144,36 @@ export async function handleIncoming({ instance, webhook }) {
                 ).trim();
             },
         });
+        return;
+    }
+
+    // command: set pt <kode>
+    if (key === "set_pt") {
+        if (!master) return;
+
+        const code = (args[0] || "").trim();
+        const r = await setPt(group, code);
+
+        if (!r.ok) {
+            await sendText({ ...ctx, message: `❌ ${r.error}\nContoh: set pt PT MAJU MUNDUR` });
+            return;
+        }
+
+        await sendText({
+            ...ctx,
+            message: r.created
+                ? `✅ PT dibuat & diset: ${r.pt.code}`
+                : `✅ PT group diset: ${r.pt.code}`,
+        });
+        return;
+    }
+
+// optional: unset pt
+    if (key === "unset_pt") {
+        if (!master) return;
+        group.pt_company_id = null;
+        await group.save();
+        await sendText({ ...ctx, message: "✅ PT group dihapus (unset)." });
         return;
     }
 

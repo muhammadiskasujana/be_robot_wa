@@ -59,6 +59,29 @@ export function parseCommandV2(text) {
         return { key: "set_leasing", args: [code], argsLines: lines.slice(1) };
     }
 
+    // unset leasing
+    if (first === "unset leasing") {
+        return { key: "unset_leasing", args: [], argsLines: lines.slice(1) };
+    }
+
+    // ✅ set pt <kode/nama>
+    // contoh: "set pt PT MAJU MUNDUR" atau "set pt maju mundur"
+    if (first.startsWith("set pt ")) {
+        const code = first.replace("set pt ", "").trim();
+        return { key: "set_pt", args: code ? [code] : [], argsLines: lines.slice(1) };
+    }
+    // juga dukung: "set pt" multiline (opsional)
+    if (first === "set pt") {
+        // ambil dari baris berikutnya (gabung)
+        const code = lines.slice(1).join(" ").trim();
+        return { key: "set_pt", args: code ? [code] : [], argsLines: [] };
+    }
+
+    // ✅ unset pt
+    if (first === "unset pt") return { key: "unset_pt", args: [], argsLines: lines.slice(1) };
+    // alias biar natural
+    if (first === "hapus pt") return { key: "unset_pt", args: [], argsLines: lines.slice(1) };
+
     // tambah cabang ... (boleh di baris pertama atau multiline)
     if (first.startsWith("tambah cabang")) {
         const after = first.replace("tambah cabang", "").trim(); // bisa "nasional" atau "banjarmasin,jakarta"

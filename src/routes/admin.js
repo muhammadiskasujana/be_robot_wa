@@ -12,6 +12,8 @@ import * as Leasing from "../controllers/admin/leasing.controller.js";
 import * as Logs from "../controllers/admin/logs.controller.js";
 import * as Credit from "../controllers/admin/waCreditController.js";
 import * as Billing from "../controllers/admin/billing.controller.js";
+import * as Pt from "../controllers/admin/ptCompanyController.js";
+import * as Subs from "../controllers/admin/subscriptionController.js";
 
 const router = Router();
 router.use(requireAuth);
@@ -50,8 +52,11 @@ router.post("/commands/:id/modes", asyncWrap(Commands.setAllowedModes)); // repl
 // Groups control
 router.get("/groups", asyncWrap(Groups.list));
 router.get("/groups/:id", asyncWrap(Groups.getById));
-router.put("/groups/:id", asyncWrap(Groups.updateBasic)); // title/bot enabled/notif/mode
-router.post("/groups/:id/leasing", asyncWrap(Groups.setLeasingConfig)); // HO/AREA/CABANG + branches
+router.put("/groups/:id", asyncWrap(Groups.updateBasic));
+
+// leasing set/unset (mirip PT)
+router.put("/groups/:id/leasing", asyncWrap(Groups.setLeasingConfig));
+router.delete("/groups/:id/leasing", asyncWrap(Groups.unsetLeasing));
 
 // Leasing master + branches
 router.get("/leasing/companies", asyncWrap(Leasing.listCompanies));
@@ -116,5 +121,20 @@ router.post("/billing/wallets/:id/debit", asyncWrap(Billing.debitWallet));
 router.get("/billing/ledger", asyncWrap(Billing.listLedger));
 
 router.post("/billing/topup", asyncWrap(Billing.topupByScope));
+
+router.get("/pt-companies", asyncWrap(Pt.list));
+router.post("/pt-companies", asyncWrap(Pt.create));
+router.put("/pt-companies/:id", asyncWrap(Pt.update));
+router.delete("/pt-companies/:id", asyncWrap(Pt.remove));
+
+// set/unset PT ke group
+router.put("/groups/:id/pt", asyncWrap(Pt.setGroupPt));
+router.delete("/groups/:id/pt", asyncWrap(Pt.unsetGroupPt));
+
+router.get("/subscriptions", asyncWrap(Subs.list));
+router.post("/subscriptions", asyncWrap(Subs.createOrExtend));
+router.post("/subscriptions/:id/disable", asyncWrap(Subs.disable));
+
+
 
 export default router;

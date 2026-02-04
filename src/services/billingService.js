@@ -1,6 +1,22 @@
 // src/services/billingService.js
-import { WaCommand, WaCommandPolicy, WaCreditWallet, WaCreditTransaction, sequelize } from "../models/index.js";
-import { fetchString, fetchJSON, TTL, CacheKeys, CacheInvalidate } from "./cacheService.js";
+import {
+    WaCommand,
+    WaCommandPolicy,
+    WaCreditWallet,
+    WaCreditTransaction,
+    // WAJIB: pastikan model ini ada setelah migration + model dibuat
+    WaGroupSubscription,
+    sequelize,
+} from "../models/index.js";
+
+import {
+    fetchString,
+    fetchJSON,
+    fetchBool,
+    TTL,
+    CacheKeys,
+    CacheInvalidate,
+} from "./cacheService.js";
 
 function up(v) {
     return String(v || "").trim().toUpperCase();
@@ -13,6 +29,10 @@ function clampMin(n, min = 1) {
     const x = Number(n);
     if (!Number.isFinite(x)) return min;
     return Math.max(min, x);
+}
+
+function nowDate() {
+    return new Date();
 }
 
 /**
@@ -28,10 +48,64 @@ export async function getCommandIdByKeyCached(commandKey) {
     return fetchString(
         CacheKeys.cmdId(key),
         async () => {
-            const row = await WaCommand.findOne({ where: { key }, attributes: ["id"] });
+            const row = await WaCommand.findOne({
+                where: { key },
+                attributes: ["id"],
+            });
             return row?.id || "";
         },
-        TTL.JSON // boleh 10m
+        TTL.JSON // 10 menit ok
+    );
+}
+
+/**
+ * =========================
+ * Subscription check (cache)
+ * =========================
+ * SUBSCRIPTION berlaku di level GROUP (sesuai rencana kamu).
+ *
+ * asumsi table:
+ * - group_id
+ * - is_active
+ * - expires_at
+ * - (opsional) command_id / feature_key -> kalau kamu mau granular.
+ *
+ * Di sini: kalau ada command_id kolom, kita dukung:
+ * - subscription command-specific (command_id = pol.command_id)
+ * - atau global per group (command_id null)
+ */
+async function isGroupSubscribedCached({ group_id, command_id }) {
+    if (!group_id) return false;
+
+    const k = `sub:g:${group_id}:c:${command_id || "any"}`;
+
+    return fetchBool(
+        k,
+        async () => {
+            // NOTE: query dibuat ringan, ambil 1 row saja
+            const where = {
+                group_id,
+                is_active: true,
+                // expires_at > now
+                expires_at: { [sequelize.Sequelize.Op.gt]: nowDate() },
+            };
+
+            // kalau kamu bikin subscription per-command,
+            // maka aktif bila command_id = command_id OR command_id is null (global)
+            if (command_id) {
+                where[sequelize.Sequelize.Op.or] = [
+                    { command_id },
+                    { command_id: null },
+                ];
+            }
+
+            const row = await WaGroupSubscription.findOne({
+                where,
+                attributes: ["id"],
+            });
+            return !!row;
+        },
+        20 * 1000 // 20 detik (trafik tinggi, cukup aman)
     );
 }
 
@@ -41,13 +115,30 @@ export async function getCommandIdByKeyCached(commandKey) {
  * priority:
  * - GROUP policy
  * - LEASING policy (kalau group punya leasing)
- * - DEFAULT (gratis)
+ * - DEFAULT (FREE)
  */
 export async function resolvePolicyCached({ group, commandKey }) {
     if (!group?.id) return { ok: false, error: "group wajib" };
 
     const command_id = await getCommandIdByKeyCached(commandKey);
     if (!command_id) return { ok: false, error: `command "${commandKey}" belum terdaftar` };
+
+    // helper normalize policy -> selalu punya billing_mode
+    const normalizePolicy = (raw) => {
+        const p = raw || {};
+        const billing_mode = up(p.billing_mode || (p.use_credit ? "CREDIT" : "FREE"));
+
+        return {
+            ...p,
+            billing_mode: ["FREE", "CREDIT", "SUBSCRIPTION"].includes(billing_mode) ? billing_mode : "FREE",
+            // legacy compatibility:
+            // - kalau billing_mode CREDIT -> use_credit true (biar consistent)
+            // - kalau bukan CREDIT -> use_credit false
+            use_credit: billing_mode === "CREDIT" ? true : false,
+            credit_cost: billing_mode === "CREDIT" ? clampMin(p.credit_cost || 1, 1) : 0,
+            wallet_scope: up(p.wallet_scope || "GROUP") || "GROUP",
+        };
+    };
 
     // 1) GROUP policy
     const pg = await fetchJSON(
@@ -58,10 +149,12 @@ export async function resolvePolicyCached({ group, commandKey }) {
             });
             return row ? row.toJSON() : null;
         },
-        60 * 1000 // 1 menit (policy bisa berubah)
+        60 * 1000 // 1 menit
     );
+
     if (pg) {
-        return { ok: true, scope_hit: "GROUP", command_id, ...pg };
+        const p = normalizePolicy(pg);
+        return { ok: true, scope_hit: "GROUP", command_id, ...p };
     }
 
     // 2) LEASING policy (kalau group punya leasing)
@@ -78,16 +171,18 @@ export async function resolvePolicyCached({ group, commandKey }) {
         );
 
         if (pl) {
-            return { ok: true, scope_hit: "LEASING", command_id, ...pl };
+            const p = normalizePolicy(pl);
+            return { ok: true, scope_hit: "LEASING", command_id, ...p };
         }
     }
 
-    // 3) DEFAULT: gratis
+    // 3) DEFAULT: FREE
     return {
         ok: true,
         scope_hit: "DEFAULT",
         command_id,
         is_enabled: true,
+        billing_mode: "FREE",
         use_credit: false,
         credit_cost: 0,
         wallet_scope: "GROUP",
@@ -106,7 +201,9 @@ function resolveWalletTarget({ group, wallet_scope }) {
     const ws = up(wallet_scope || "GROUP");
 
     if (ws === "LEASING") {
-        if (!group.leasing_id) return { ok: false, error: "wallet_scope LEASING tapi group belum punya leasing" };
+        if (!group.leasing_id) {
+            return { ok: false, error: "wallet_scope LEASING tapi group belum punya leasing" };
+        }
         return { ok: true, scope_type: "LEASING", group_id: null, leasing_id: group.leasing_id };
     }
 
@@ -132,8 +229,10 @@ async function ensureWallet(target, t) {
 /**
  * =========================
  * checkAndDebit (single entry)
- * - default gratis kalau policy tidak ada
- * - debit pakai transaction + row lock
+ * billing_mode:
+ * - FREE => allow
+ * - CREDIT => debit wallet
+ * - SUBSCRIPTION => cek wa_group_subscriptions
  */
 export async function checkAndDebit({
                                         commandKey,
@@ -149,16 +248,77 @@ export async function checkAndDebit({
     }
 
     if (pol.is_enabled === false) {
-        return { ok: true, allowed: false, charged: false, use_credit: false, credit_cost: 0, policy: pol };
+        return {
+            ok: true,
+            allowed: false,
+            charged: false,
+            billing_mode: pol.billing_mode || "FREE",
+            policy: pol,
+        };
     }
 
-    // gratis
-    if (!pol.use_credit) {
-        return { ok: true, allowed: true, charged: false, use_credit: false, credit_cost: 0, policy: pol };
+    const billing_mode = up(pol.billing_mode || (pol.use_credit ? "CREDIT" : "FREE"));
+
+    // ======================
+    // FREE
+    // ======================
+    if (billing_mode === "FREE") {
+        return {
+            ok: true,
+            allowed: true,
+            charged: false,
+            billing_mode: "FREE",
+            policy: pol,
+            credit_cost: 0,
+        };
     }
 
+    // ======================
+    // SUBSCRIPTION
+    // ======================
+    if (billing_mode === "SUBSCRIPTION") {
+        // kalau belum ada model / belum jadi, return error informatif
+        if (!WaGroupSubscription) {
+            return {
+                ok: false,
+                allowed: false,
+                error: "Model WaGroupSubscription belum tersedia (cek migration + model).",
+                policy: pol,
+            };
+        }
+
+        const subscribed = await isGroupSubscribedCached({
+            group_id: group.id,
+            command_id: pol.command_id,
+        });
+
+        if (!subscribed) {
+            return {
+                ok: true,
+                allowed: false,
+                charged: false,
+                billing_mode: "SUBSCRIPTION",
+                error: "Langganan belum aktif / sudah expired.",
+                policy: pol,
+            };
+        }
+
+        return {
+            ok: true,
+            allowed: true,
+            charged: false,
+            billing_mode: "SUBSCRIPTION",
+            policy: pol,
+        };
+    }
+
+    // ======================
+    // CREDIT
+    // ======================
+    // backward compatible: kalau billing_mode gak valid tapi use_credit true -> tetap debit
     const cost = clampMin(pol.credit_cost || 1, 1);
     const tgt = resolveWalletTarget({ group, wallet_scope: pol.wallet_scope });
+
     if (!tgt.ok) {
         return { ok: false, allowed: false, error: tgt.error, policy: pol };
     }
@@ -218,6 +378,7 @@ export async function checkAndDebit({
                 ok: true,
                 allowed: false,
                 charged: false,
+                billing_mode: "CREDIT",
                 error: `Kredit habis. Saldo: ${out.balance_before}, biaya: ${cost}`,
                 policy: pol,
                 credit_cost: cost,
@@ -228,6 +389,7 @@ export async function checkAndDebit({
             ok: true,
             allowed: true,
             charged: true,
+            billing_mode: "CREDIT",
             policy: pol,
             credit_cost: cost,
             balance_after: out.balance_after,

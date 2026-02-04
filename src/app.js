@@ -7,6 +7,7 @@ import cookieParser from "cookie-parser";
 import webhookRoutes from "./routes/webhook.js";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
+import notifyRoutes from "./routes/notifyRoutes.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -42,6 +43,7 @@ app.get("/", (req, res) => res.send("OK"));
 app.use("/webhook", webhookRoutes);
 app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes);
+app.use("/api/notify", notifyRoutes);
 
 app.use((err, req, res, next) => {
     console.error("❌ Error:", err?.message || err);

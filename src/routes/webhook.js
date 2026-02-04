@@ -3,14 +3,22 @@ import { WaInstance, WaMessageLog } from "../models/index.js";
 import { handleIncoming } from "../services/robot.js";
 
 import { fetchJson, TTL, CacheKeys } from "../services/cacheService.js";
+import { Op } from "sequelize";
+import Sequelize from "sequelize";
 
 async function getWaInstanceCached(idInstance) {
     return fetchJson(
         CacheKeys.waInstance(idInstance),
         async () => {
             const instance = await WaInstance.findOne({
-                where: { id_instance: idInstance, is_active: true },
-                attributes: ["id_instance", "api_token"],
+                where: {
+                    id_instance: idInstance,
+                    is_active: true,
+                    [Op.and]: [
+                        Sequelize.literal(`(meta->'roles') @> '["BOT"]'::jsonb`)
+                    ],
+                },
+                attributes: ["id_instance", "api_token", "meta"],
             });
             return instance ? instance.toJSON() : null;
         },

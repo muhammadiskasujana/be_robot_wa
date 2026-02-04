@@ -26,6 +26,23 @@ function toBool(v, def = true) {
     return ["1", "true", "yes", "y", "on"].includes(s);
 }
 
+function normalizeBillingInput({ billing_mode, use_credit }, currentBillingMode = "FREE") {
+    // prioritas billing_mode kalau ada
+    if (billing_mode !== undefined && billing_mode !== null && billing_mode !== "") {
+        const bm = up(billing_mode);
+        if (["FREE", "CREDIT", "SUBSCRIPTION"].includes(bm)) return bm;
+        return "FREE";
+    }
+
+    // fallback legacy: use_credit -> billing_mode
+    if (use_credit !== undefined) {
+        const uc = toBool(use_credit, false);
+        return uc ? "CREDIT" : "FREE";
+    }
+
+    return up(currentBillingMode || "FREE");
+}
+
 /**
  * scope_type: GROUP | LEASING
  * - GROUP requires group_id
@@ -131,10 +148,14 @@ export async function createPolicy(req, res) {
     if (!command_id) return res.status(400).json({ ok: false, error: "command_id wajib" });
 
     const is_enabled = toBool(req.body.is_enabled, true);
-    const use_credit = toBool(req.body.use_credit, false);
-    const credit_cost = Math.max(1, toInt(req.body.credit_cost, 1));
-    const wallet_scope = up(req.body.wallet_scope || (norm.scope_type === "LEASING" ? "LEASING" : "GROUP"));
 
+    // ✅ billing_mode jadi source of truth (support legacy use_credit)
+    const billing_mode = normalizeBillingInput(req.body, "FREE");
+
+    // cost hanya relevan untuk CREDIT, tapi tetap boleh disimpan (hook akan handle use_credit)
+    const credit_cost = Math.max(1, toInt(req.body.credit_cost, 1));
+
+    const wallet_scope = up(req.body.wallet_scope || (norm.scope_type === "LEASING" ? "LEASING" : "GROUP"));
     if (!["GROUP", "LEASING"].includes(wallet_scope)) {
         return res.status(400).json({ ok: false, error: "wallet_scope harus GROUP atau LEASING" });
     }
@@ -143,14 +164,21 @@ export async function createPolicy(req, res) {
         ...norm,
         command_id,
         is_enabled,
-        use_credit,
+        billing_mode,          // ✅ penting
         credit_cost,
         wallet_scope,
         meta: req.body.meta || null,
     });
 
-    // cache invalidate policy
-    invalidatePolicyCache({ scope_type: row.scope_type, group_id: row.group_id, leasing_id: row.leasing_id, command_id: row.command_id });
+    // ✅ pastikan response reflect hook beforeValidate/beforeSave
+    await row.reload();
+
+    invalidatePolicyCache({
+        scope_type: row.scope_type,
+        group_id: row.group_id,
+        leasing_id: row.leasing_id,
+        command_id: row.command_id,
+    });
 
     res.json({ ok: true, data: row });
 }
@@ -162,24 +190,41 @@ export async function updatePolicy(req, res) {
     const row = await WaCommandPolicy.findByPk(req.params.id);
     if (!row) return res.status(404).json({ ok: false, error: "Not found" });
 
-    const is_enabled = req.body.is_enabled !== undefined ? toBool(req.body.is_enabled, row.is_enabled) : row.is_enabled;
-    const use_credit = req.body.use_credit !== undefined ? toBool(req.body.use_credit, row.use_credit) : row.use_credit;
-    const credit_cost = req.body.credit_cost !== undefined ? Math.max(1, toInt(req.body.credit_cost, row.credit_cost)) : row.credit_cost;
-    const wallet_scope = req.body.wallet_scope !== undefined ? up(req.body.wallet_scope) : row.wallet_scope;
+    const is_enabled =
+        req.body.is_enabled !== undefined ? toBool(req.body.is_enabled, row.is_enabled) : row.is_enabled;
+
+    const credit_cost =
+        req.body.credit_cost !== undefined
+            ? Math.max(1, toInt(req.body.credit_cost, row.credit_cost))
+            : row.credit_cost;
+
+    const wallet_scope =
+        req.body.wallet_scope !== undefined ? up(req.body.wallet_scope) : row.wallet_scope;
 
     if (!["GROUP", "LEASING"].includes(wallet_scope)) {
         return res.status(400).json({ ok: false, error: "wallet_scope harus GROUP atau LEASING" });
     }
 
+    // ✅ billing_mode source of truth, support legacy use_credit
+    const billing_mode = normalizeBillingInput(req.body, row.billing_mode);
+
     await row.update({
         is_enabled,
-        use_credit,
+        billing_mode,     // ✅ penting
         credit_cost,
         wallet_scope,
         meta: req.body.meta !== undefined ? (req.body.meta || null) : row.meta,
     });
 
-    invalidatePolicyCache({ scope_type: row.scope_type, group_id: row.group_id, leasing_id: row.leasing_id, command_id: row.command_id });
+    // ✅ wajib supaya response yang keluar adalah nilai setelah hook normalisasi
+    await row.reload();
+
+    invalidatePolicyCache({
+        scope_type: row.scope_type,
+        group_id: row.group_id,
+        leasing_id: row.leasing_id,
+        command_id: row.command_id,
+    });
 
     res.json({ ok: true, data: row });
 }
