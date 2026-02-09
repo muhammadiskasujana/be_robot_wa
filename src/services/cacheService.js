@@ -28,6 +28,7 @@ export const CacheKeys = {
     policyLeasing: (leasingId, cmdId) => `policy:l:${leasingId}:c:${cmdId}`,
     group: (chatId) => `group:${chatId}`,
     leasingCode: (leasingId) => `leasing:code:${leasingId}`,
+    policyPersonal: (phone, commandId) => `policy:personal:${phone}:cmd:${commandId}`,
 };
 
 // ===== anti-stampede (dedupe concurrent miss) =====
@@ -131,4 +132,5 @@ export const CacheInvalidate = {
 
     group: (chatId) => invalidateKey(CacheKeys.group(chatId)),
     leasingCode: (leasingId) => invalidateKey(CacheKeys.leasingCode(leasingId)),
+    policyPersonal: (phone, commandId) => cache.delete(CacheKeys.policyPersonal(phone, commandId)),
 };

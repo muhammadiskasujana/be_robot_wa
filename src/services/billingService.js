@@ -117,13 +117,12 @@ async function isGroupSubscribedCached({ group_id, command_id }) {
  * - LEASING policy (kalau group punya leasing)
  * - DEFAULT (FREE)
  */
-export async function resolvePolicyCached({ group, commandKey }) {
+export async function resolvePolicyCached({ group, commandKey, phone_e164 = null }) {
     if (!group?.id) return { ok: false, error: "group wajib" };
 
     const command_id = await getCommandIdByKeyCached(commandKey);
     if (!command_id) return { ok: false, error: `command "${commandKey}" belum terdaftar` };
 
-    // helper normalize policy -> selalu punya billing_mode
     const normalizePolicy = (raw) => {
         const p = raw || {};
         const billing_mode = up(p.billing_mode || (p.use_credit ? "CREDIT" : "FREE"));
@@ -131,14 +130,30 @@ export async function resolvePolicyCached({ group, commandKey }) {
         return {
             ...p,
             billing_mode: ["FREE", "CREDIT", "SUBSCRIPTION"].includes(billing_mode) ? billing_mode : "FREE",
-            // legacy compatibility:
-            // - kalau billing_mode CREDIT -> use_credit true (biar consistent)
-            // - kalau bukan CREDIT -> use_credit false
-            use_credit: billing_mode === "CREDIT" ? true : false,
+            use_credit: billing_mode === "CREDIT",
             credit_cost: billing_mode === "CREDIT" ? clampMin(p.credit_cost || 1, 1) : 0,
             wallet_scope: up(p.wallet_scope || "GROUP") || "GROUP",
         };
     };
+
+    // 0) PERSONAL policy (kalau phone tersedia)
+    if (phone_e164) {
+        const pp = await fetchJSON(
+            CacheKeys.policyPersonal?.(phone_e164, command_id) || `pol:p:${phone_e164}:c:${command_id}`,
+            async () => {
+                const row = await WaCommandPolicy.findOne({
+                    where: { scope_type: "PERSONAL", phone_e164, command_id },
+                });
+                return row ? row.toJSON() : null;
+            },
+            60 * 1000
+        );
+
+        if (pp) {
+            const p = normalizePolicy(pp);
+            return { ok: true, scope_hit: "PERSONAL", command_id, ...p };
+        }
+    }
 
     // 1) GROUP policy
     const pg = await fetchJSON(
@@ -149,7 +164,7 @@ export async function resolvePolicyCached({ group, commandKey }) {
             });
             return row ? row.toJSON() : null;
         },
-        60 * 1000 // 1 menit
+        60 * 1000
     );
 
     if (pg) {
@@ -197,31 +212,40 @@ export async function resolvePolicyCached({ group, commandKey }) {
  * - GROUP  => wallet target group.id
  * - LEASING => wallet target group.leasing_id
  */
-function resolveWalletTarget({ group, wallet_scope }) {
+function resolveWalletTarget({ group, wallet_scope, phone_e164 = null }) {
     const ws = up(wallet_scope || "GROUP");
+
+    if (ws === "PERSONAL") {
+        if (!phone_e164) {
+            return { ok: false, error: "wallet_scope PERSONAL tapi phone_e164 tidak tersedia" };
+        }
+        return { ok: true, scope_type: "PERSONAL", phone_e164, group_id: null, leasing_id: null };
+    }
 
     if (ws === "LEASING") {
         if (!group.leasing_id) {
             return { ok: false, error: "wallet_scope LEASING tapi group belum punya leasing" };
         }
-        return { ok: true, scope_type: "LEASING", group_id: null, leasing_id: group.leasing_id };
+        return { ok: true, scope_type: "LEASING", group_id: null, leasing_id: group.leasing_id, phone_e164: null };
     }
 
-    return { ok: true, scope_type: "GROUP", group_id: group.id, leasing_id: null };
+    return { ok: true, scope_type: "GROUP", group_id: group.id, leasing_id: null, phone_e164: null };
 }
 
 async function ensureWallet(target, t) {
-    const where =
-        target.scope_type === "LEASING"
-            ? { scope_type: "LEASING", leasing_id: target.leasing_id, group_id: null }
-            : { scope_type: "GROUP", group_id: target.group_id, leasing_id: null };
+    let where;
+
+    if (target.scope_type === "PERSONAL") {
+        where = { scope_type: "PERSONAL", phone_e164: target.phone_e164, group_id: null, leasing_id: null };
+    } else if (target.scope_type === "LEASING") {
+        where = { scope_type: "LEASING", leasing_id: target.leasing_id, group_id: null, phone_e164: null };
+    } else {
+        where = { scope_type: "GROUP", group_id: target.group_id, leasing_id: null, phone_e164: null };
+    }
 
     let wallet = await WaCreditWallet.findOne({ where, transaction: t, lock: t.LOCK.UPDATE });
     if (!wallet) {
-        wallet = await WaCreditWallet.create(
-            { ...where, balance: 0, is_active: true, meta: null },
-            { transaction: t }
-        );
+        wallet = await WaCreditWallet.create({ ...where, balance: 0, is_active: true, meta: null }, { transaction: t });
     }
     return wallet;
 }
@@ -237,6 +261,7 @@ async function ensureWallet(target, t) {
 export async function checkAndDebit({
                                         commandKey,
                                         group,
+                                        phone_e164 = null, // <-- sender wallet target
                                         webhook = null,
                                         ref_type = "WA_MESSAGE",
                                         ref_id = null,
@@ -317,7 +342,7 @@ export async function checkAndDebit({
     // ======================
     // backward compatible: kalau billing_mode gak valid tapi use_credit true -> tetap debit
     const cost = clampMin(pol.credit_cost || 1, 1);
-    const tgt = resolveWalletTarget({ group, wallet_scope: pol.wallet_scope });
+    const tgt = resolveWalletTarget({ group, wallet_scope: pol.wallet_scope, phone_e164 });
 
     if (!tgt.ok) {
         return { ok: false, allowed: false, error: tgt.error, policy: pol };
@@ -356,6 +381,7 @@ export async function checkAndDebit({
                     command_id: pol.command_id,
                     group_id: wallet.group_id || group.id || null,
                     leasing_id: wallet.leasing_id || group.leasing_id || null,
+                    phone_e164: wallet.phone_e164 || phone_e164 || null,
                     ref_type,
                     ref_id: refId,
                     notes: notes || commandKey,
@@ -404,10 +430,11 @@ export async function checkAndDebit({
  * Invalidation helpers (dipanggil dari CRUD admin policy/wallet)
  * =========================
  */
-export function invalidatePolicyCache({ scope_type, group_id, leasing_id, command_id }) {
+export function invalidatePolicyCache({ scope_type, group_id, leasing_id, phone_e164, command_id }) {
     const st = up(scope_type);
     if (st === "GROUP" && group_id && command_id) CacheInvalidate.policyGroup(group_id, command_id);
     if (st === "LEASING" && leasing_id && command_id) CacheInvalidate.policyLeasing(leasing_id, command_id);
+    if (st === "PERSONAL" && phone_e164 && command_id) (CacheInvalidate.policyPersonal?.(phone_e164, command_id) || null);
 }
 
 export function invalidateCommandCache(commandKey) {

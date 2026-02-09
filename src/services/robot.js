@@ -892,6 +892,33 @@ export async function handleIncoming({ instance, webhook }) {
         return;
     }
 
+    // ===== start / stop group (toggle notif_data_access_enabled) =====
+    if (key === "group_start") {
+        if (!master) return;
+
+        group.notif_data_access_enabled = true;
+        await group.save();
+
+        await sendText({
+            ...ctx,
+            message: "✅ Notifikasi data diaktifkan untuk group ini.",
+        });
+        return;
+    }
+
+    if (key === "group_stop") {
+        if (!master) return;
+
+        group.notif_data_access_enabled = false;
+        await group.save();
+
+        await sendText({
+            ...ctx,
+            message: "⛔ Notifikasi data dimatikan untuk group ini.",
+        });
+        return;
+    }
+
     // ===== template: input data motor/r2 =====
     // ===== template: input data motor/r2 =====
     if (key === "input_data_r2" || key === "input_data_r4") {

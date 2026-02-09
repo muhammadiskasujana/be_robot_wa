@@ -8,9 +8,11 @@ export default (sequelize, DataTypes) =>
                 defaultValue: sequelize.literal("gen_random_uuid()"),
             },
 
-            scope_type: { type: DataTypes.STRING(10), allowNull: false }, // GROUP | LEASING
+            scope_type: { type: DataTypes.STRING(10), allowNull: false }, // GROUP | LEASING | PERSONAL
             group_id: { type: DataTypes.UUID, allowNull: true },
             leasing_id: { type: DataTypes.UUID, allowNull: true },
+
+            phone_e164: { type: DataTypes.STRING(32), allowNull: true },
 
             command_id: { type: DataTypes.UUID, allowNull: false },
 
@@ -39,10 +41,11 @@ export default (sequelize, DataTypes) =>
                 { fields: ["scope_type"], name: "ix_wa_policies_scope" },
                 { fields: ["group_id"], name: "ix_wa_policies_group" },
                 { fields: ["leasing_id"], name: "ix_wa_policies_leasing" },
+                { fields: ["phone_e164"], name: "ix_wa_policies_phone" },
                 { fields: ["billing_mode"], name: "ix_wa_policies_billing_mode" }, // ✅ sesuai migration
                 {
                     unique: true,
-                    fields: ["scope_type", "group_id", "leasing_id", "command_id"],
+                    fields: ["scope_type", "group_id", "leasing_id","phone_e164", "command_id"],
                     name: "ux_wa_policies_scope_target_command",
                 },
             ],
@@ -52,6 +55,8 @@ export default (sequelize, DataTypes) =>
                     if (row.wallet_scope) row.wallet_scope = String(row.wallet_scope).trim().toUpperCase();
                     if (row.billing_mode) row.billing_mode = String(row.billing_mode).trim().toUpperCase();
 
+                    // normalize phone
+                    if (row.phone_e164) row.phone_e164 = String(row.phone_e164).trim();
                     // hard normalize billing_mode
                     const bm = row.billing_mode || "FREE";
                     if (!["FREE", "CREDIT", "SUBSCRIPTION"].includes(bm)) row.billing_mode = "FREE";

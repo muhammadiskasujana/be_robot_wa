@@ -17,6 +17,9 @@ export default (sequelize, DataTypes) =>
             group_id: { type: DataTypes.UUID, allowNull: true },
             leasing_id: { type: DataTypes.UUID, allowNull: true },
 
+            // NEW (recommended)
+            phone_e164: { type: DataTypes.STRING(32), allowNull: true },
+
             ref_type: { type: DataTypes.STRING(32), allowNull: true },
             ref_id: { type: DataTypes.STRING(120), allowNull: true },
             notes: { type: DataTypes.STRING(255), allowNull: true },
@@ -31,10 +34,15 @@ export default (sequelize, DataTypes) =>
                 { fields: ["group_id"], name: "ix_wa_tx_group" },
                 { fields: ["leasing_id"], name: "ix_wa_tx_leasing" },
                 { fields: ["ref_type", "ref_id"], name: "ix_wa_tx_ref" },
+
+                // NEW
+                { fields: ["phone_e164"], name: "ix_wa_tx_phone" },
             ],
             hooks: {
                 beforeValidate: (row) => {
                     if (row.tx_type) row.tx_type = String(row.tx_type).trim().toUpperCase();
+                    if (row.phone_e164) row.phone_e164 = String(row.phone_e164).trim();
+
                     if (row.amount !== undefined && row.amount !== null) row.amount = Math.max(1, Number(row.amount || 1));
                     if (row.balance_before !== undefined && row.balance_before !== null)
                         row.balance_before = Math.max(0, Number(row.balance_before || 0));

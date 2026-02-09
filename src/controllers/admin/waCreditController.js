@@ -34,16 +34,25 @@ function normalizeScope(input = {}) {
     const scope_type = up(input.scope_type);
     const group_id = input.group_id || null;
     const leasing_id = input.leasing_id || null;
+    const phone_e164 = input.phone_e164 || input.phone || null;
 
-    if (!["GROUP", "LEASING"].includes(scope_type)) {
-        return { ok: false, error: "scope_type harus GROUP atau LEASING" };
+    if (!["GROUP", "LEASING", "PERSONAL"].includes(scope_type)) {
+        return { ok: false, error: "scope_type harus GROUP, LEASING, atau PERSONAL" };
     }
+
     if (scope_type === "GROUP") {
         if (!group_id) return { ok: false, error: "group_id wajib untuk scope GROUP" };
-        return { ok: true, scope_type: "GROUP", group_id, leasing_id: null };
+        return { ok: true, scope_type: "GROUP", group_id, leasing_id: null, phone_e164: null };
     }
-    if (!leasing_id) return { ok: false, error: "leasing_id wajib untuk scope LEASING" };
-    return { ok: true, scope_type: "LEASING", group_id: null, leasing_id };
+
+    if (scope_type === "LEASING") {
+        if (!leasing_id) return { ok: false, error: "leasing_id wajib untuk scope LEASING" };
+        return { ok: true, scope_type: "LEASING", group_id: null, leasing_id, phone_e164: null };
+    }
+
+    // PERSONAL
+    if (!phone_e164) return { ok: false, error: "phone_e164 wajib untuk scope PERSONAL" };
+    return { ok: true, scope_type: "PERSONAL", group_id: null, leasing_id: null, phone_e164 };
 }
 
 /* ============================================================
@@ -117,6 +126,9 @@ export async function listPolicies(req, res) {
         { model: LeasingCompany, as: "leasing", attributes: ["id", "code", "name"] },
     ];
 
+    const phone_e164 = req.query.phone_e164 || null;
+    if (phone_e164) where.phone_e164 = phone_e164;
+
     if (q) {
         // filter via OR ke kolom policy sendiri + join field (pakai $path$)
         where[Op.or] = [
@@ -127,6 +139,7 @@ export async function listPolicies(req, res) {
             { "$group.title$": { [Op.iLike]: `%${q}%` } },
             { "$leasing.code$": { [Op.iLike]: `%${q}%` } },
             { "$leasing.name$": { [Op.iLike]: `%${q}%` } },
+            { phone_e164: { [Op.iLike]: `%${q}%` } },
         ];
     }
 
@@ -153,13 +166,17 @@ export async function createPolicy(req, res) {
     if (!command_id) return res.status(400).json({ ok: false, error: "command_id wajib" });
 
     const is_enabled = toBool(req.body.is_enabled, true);
-    const use_credit = toBool(req.body.use_credit, false);
+
+    // source of truth
+    const billing_mode = req.body.billing_mode ? up(req.body.billing_mode) : (toBool(req.body.use_credit, false) ? "CREDIT" : "FREE");
+    const bm = ["FREE", "CREDIT", "SUBSCRIPTION"].includes(billing_mode) ? billing_mode : "FREE";
+
     const credit_cost = Math.max(1, toInt(req.body.credit_cost, 1));
 
-    // default: wallet_scope ikut scope target
+    // default wallet_scope ikut scope target
     const wallet_scope = up(req.body.wallet_scope || norm.scope_type);
-    if (!["GROUP", "LEASING"].includes(wallet_scope)) {
-        return res.status(400).json({ ok: false, error: "wallet_scope harus GROUP atau LEASING" });
+    if (!["GROUP", "LEASING", "PERSONAL"].includes(wallet_scope)) {
+        return res.status(400).json({ ok: false, error: "wallet_scope harus GROUP, LEASING, atau PERSONAL" });
     }
 
     try {
@@ -167,21 +184,26 @@ export async function createPolicy(req, res) {
             ...norm,
             command_id,
             is_enabled,
-            use_credit,
+            billing_mode: bm,
             credit_cost,
             wallet_scope,
             meta: req.body.meta || null,
         });
 
+        await row.reload();
+
+        // invalidate cache (kalau sudah kamu patch support PERSONAL)
+        // invalidatePolicyCache({ scope_type: row.scope_type, group_id: row.group_id, leasing_id: row.leasing_id, phone_e164: row.phone_e164, command_id: row.command_id });
+
         res.json({ ok: true, data: row });
     } catch (e) {
-        // unique constraint friendly
         if (String(e?.name || "").includes("SequelizeUniqueConstraintError")) {
             return res.status(400).json({ ok: false, error: "Policy sudah ada untuk scope+target+command ini." });
         }
         throw e;
     }
 }
+
 
 /**
  * PUT /admin/wa-policies/:id
@@ -191,23 +213,30 @@ export async function updatePolicy(req, res) {
     if (!row) return res.status(404).json({ ok: false, error: "Not found" });
 
     const is_enabled = req.body.is_enabled !== undefined ? toBool(req.body.is_enabled, row.is_enabled) : row.is_enabled;
-    const use_credit = req.body.use_credit !== undefined ? toBool(req.body.use_credit, row.use_credit) : row.use_credit;
+
+    const billing_mode = req.body.billing_mode !== undefined
+        ? up(req.body.billing_mode)
+        : (req.body.use_credit !== undefined ? (toBool(req.body.use_credit, false) ? "CREDIT" : "FREE") : row.billing_mode);
+
+    const bm = ["FREE", "CREDIT", "SUBSCRIPTION"].includes(billing_mode) ? billing_mode : "FREE";
+
     const credit_cost =
         req.body.credit_cost !== undefined ? Math.max(1, toInt(req.body.credit_cost, row.credit_cost)) : row.credit_cost;
 
     const wallet_scope = req.body.wallet_scope !== undefined ? up(req.body.wallet_scope) : row.wallet_scope;
-    if (!["GROUP", "LEASING"].includes(wallet_scope)) {
-        return res.status(400).json({ ok: false, error: "wallet_scope harus GROUP atau LEASING" });
+    if (!["GROUP", "LEASING", "PERSONAL"].includes(wallet_scope)) {
+        return res.status(400).json({ ok: false, error: "wallet_scope harus GROUP, LEASING, atau PERSONAL" });
     }
 
     await row.update({
         is_enabled,
-        use_credit,
+        billing_mode: bm,
         credit_cost,
         wallet_scope,
         meta: req.body.meta !== undefined ? (req.body.meta || null) : row.meta,
     });
 
+    await row.reload();
     res.json({ ok: true, data: row });
 }
 
@@ -248,9 +277,13 @@ export async function listWallets(req, res) {
         { model: LeasingCompany, as: "leasing", attributes: ["id", "code", "name"] },
     ];
 
+    const phone_e164 = req.query.phone_e164 || null;
+    if (phone_e164) where.phone_e164 = phone_e164;
+
     if (q) {
         where[Op.or] = [
             { scope_type: { [Op.iLike]: `%${q}%` } },
+            { phone_e164: { [Op.iLike]: `%${q}%` } },
             { "$group.title$": { [Op.iLike]: `%${q}%` } },
             { "$group.chat_id$": { [Op.iLike]: `%${q}%` } },
             { "$leasing.code$": { [Op.iLike]: `%${q}%` } },
@@ -347,6 +380,7 @@ export async function topupWallet(req, res) {
                     balance_before: before,
                     balance_after: after,
                     command_id: null,
+                    phone_e164: w.phone_e164 || null,
                     group_id: w.group_id || null,
                     leasing_id: w.leasing_id || null,
                     ref_type,
@@ -396,6 +430,7 @@ export async function debitWallet(req, res) {
                     balance_before: before,
                     balance_after: after,
                     command_id: null,
+                    phone_e164: w.phone_e164 || null,
                     group_id: w.group_id || null,
                     leasing_id: w.leasing_id || null,
                     ref_type,

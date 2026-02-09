@@ -82,6 +82,10 @@ export function parseCommandV2(text) {
     // alias biar natural
     if (first === "hapus pt") return { key: "unset_pt", args: [], argsLines: lines.slice(1) };
 
+    // start/stop group untuk akses notif data (master-only di handler)
+    if (first === "start group") return { key: "group_start", args: [], argsLines: lines.slice(1) };
+    if (first === "stop group") return { key: "group_stop", args: [], argsLines: lines.slice(1) };
+
     // tambah cabang ... (boleh di baris pertama atau multiline)
     if (first.startsWith("tambah cabang")) {
         const after = first.replace("tambah cabang", "").trim(); // bisa "nasional" atau "banjarmasin,jakarta"

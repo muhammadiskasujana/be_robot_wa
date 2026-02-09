@@ -3,9 +3,11 @@ import crypto from "crypto";
 
 function makeJobId(payload) {
     // bikin string deterministic
+
+    const leasingKey = payload.leasing_code || payload.leasing;
     const raw = payload.accessDate
-        ? `access|${payload.leasing}|${payload.nopol}|${payload.accessDate}`
-        : `access|${payload.leasing}|${payload.nopol}|${payload.user}|${payload.no_hp}`;
+        ? `access|${leasingKey}|${payload.nopol}|${payload.accessDate}`
+        : `access|${leasingKey}|${payload.nopol}|${payload.user}|${payload.no_hp}`;
 
     // hash biar aman utk BullMQ (no ':'), panjang tetap pendek
     return "access_" + crypto.createHash("sha1").update(raw).digest("hex");
@@ -29,7 +31,9 @@ function validateBody(body) {
     const errors = [];
 
     const nopol = up(body.nopol);
-    const leasing = up(body.leasing);
+    const leasingRaw = reqStr(body.leasing);
+    const leasing = leasingRaw.replace(/\s+/g, " ").trim().toUpperCase(); // tampil full
+    const leasing_code = normalizeLeasingCode(leasingRaw);               // lookup saja
     const cabang = up(body.cabang);
     const pt = reqStr(body.pt).toUpperCase();
 
@@ -59,7 +63,8 @@ function validateBody(body) {
             nosin: up(body.nosin),
             noka: up(body.noka),
             tipe: reqStr(body.tipe),
-            leasing,
+            leasing,         // ✅ full untuk ditampilkan (FIF 0226)
+            leasing_code,    // ✅ code untuk lookup (FIF)
             cabang,
             ovd: reqStr(body.ovd),
             contactPerson: reqStr(body.contactPerson),
@@ -107,6 +112,25 @@ function verifyNotifyToken(req) {
     return token === expected;
 }
 
+function normalizeLeasingCode(raw) {
+    const s = String(raw || "").trim();
+    if (!s) return "";
+
+    const cleaned = s.replace(/\s+/g, " ").toUpperCase();
+    const parts = cleaned.split(" ").filter(Boolean);
+    if (!parts.length) return "";
+
+    const p1 = (parts[0] || "").replace(/[^A-Z0-9-]/g, "");
+    const p2 = (parts[1] || "").replace(/[^A-Z0-9-]/g, "");
+
+    // Kalau format "ADIRA WO 1225" -> ADIRA-WO
+    // Kalau "FIF 0226" -> FIF
+    const isP2Numeric = p2 && /^[0-9]+$/.test(p2);
+    const name = p2 && !isP2Numeric ? `${p1}-${p2}` : p1;
+
+    return name.replace(/-+/g, "-");
+}
+
 export async function enqueueAccessNotify(req, res) {
     // ====== AUTH TOKEN CHECK ======
     if (!verifyNotifyToken(req)) {
@@ -126,7 +150,7 @@ export async function enqueueAccessNotify(req, res) {
 
     // ====== DEDUPE 1 JAM (leasing + nopol) ======
     const lock = await acquireDedupe({
-        leasing: v.payload.leasing,
+        leasing: v.payload.leasing_code || normalizeLeasingCode(v.payload.leasing),
         nopol: v.payload.nopol,
     });
 
