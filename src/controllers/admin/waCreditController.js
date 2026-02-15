@@ -25,6 +25,18 @@ function toBool(v, def = true) {
     return ["1", "true", "yes", "y", "on"].includes(s);
 }
 
+
+function normalizePhoneE164(v = "") {
+    const digits = String(v).replace(/[^\d]/g, "");
+    if (!digits) return "";
+    if (digits.startsWith("0")) return "62" + digits.slice(1);
+    if (digits.startsWith("62")) return digits;
+    // kalau user kirim 857..., kamu bisa paksa jadi 62 juga (opsional):
+    if (digits.startsWith("8")) return "62" + digits;
+    return digits;
+}
+
+
 /**
  * Normalize scope_type + target
  * - GROUP: butuh group_id
@@ -34,7 +46,9 @@ function normalizeScope(input = {}) {
     const scope_type = up(input.scope_type);
     const group_id = input.group_id || null;
     const leasing_id = input.leasing_id || null;
-    const phone_e164 = input.phone_e164 || input.phone || null;
+
+    const phoneRaw = input.phone_e164 || input.phone || null;
+    const phone_e164 = phoneRaw ? normalizePhoneE164(phoneRaw) : null;
 
     if (!["GROUP", "LEASING", "PERSONAL"].includes(scope_type)) {
         return { ok: false, error: "scope_type harus GROUP, LEASING, atau PERSONAL" };

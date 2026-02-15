@@ -1,15 +1,14 @@
-// services/newhunterHistory.js
+// services/newhunterHistory.js (NEW - DigitalManager)
 import axios from "axios";
-import { fetchJson, TTL } from "../cacheService.js";
+import { fetchJson } from "../cacheService.js";
 
-function normPlate(s = "") {
+function normInput(s = "") {
     return String(s).trim().toUpperCase().replace(/\s+/g, "");
 }
 
 function normalizeLeasingCode(s = "") {
     const up = String(s || "").trim().toUpperCase();
     if (!up) return "";
-    // ambil token pertama biar "KREDITPLUS 1225" => "KREDITPLUS"
     return up.split(/\s+/)[0] || up;
 }
 
@@ -23,44 +22,52 @@ function resolveLeasingFromItem(item) {
     return b;
 }
 
-export async function getAccessHistoryByNopol(nopol) {
-    const plate = normPlate(nopol);
-    if (!plate) throw new Error("NOPOL kosong");
+/**
+ * Ambil riwayat akses berdasarkan param (bisa nosin/noka/nopol/...)
+ * API: https://api.digitalmanager.id/api/history/access?param=...
+ */
+export async function getAccessHistoryByParam(param) {
+    const input = normInput(param);
+    if (!input) throw new Error("Param kosong");
 
-    const baseURL = process.env.NEWHUNTER_API_BASE || "https://api-1.newhunter.id";
-    const token = process.env.NEWHUNTER_API_TOKEN;
-    if (!token) throw new Error("NEWHUNTER_API_TOKEN belum diset");
-
-    // cache key khusus nopol (TTL pendek biar aman)
-    const cacheKey = `nh:history:${plate}`;
+    const baseURL = process.env.DIGITALMANAGER_API_BASE || "https://api.digitalmanager.id";
+    const cacheKey = `dm:history:${input}`;
 
     return fetchJson(
         cacheKey,
         async () => {
-            const url = `${baseURL}/v1/tracker/getAccessHistory`;
+            const url = `${baseURL}/api/history/access`;
 
             const res = await axios.get(url, {
-                params: {
-                    historyFilter: "NOPOL",
-                    param: plate,
-                },
-                headers: {
-                    Authorization: token, // sesuai contoh kamu (Bearer sudah termasuk atau token mentah)
-                },
+                params: { param: input },
                 timeout: 20000,
             });
 
-            const arr = Array.isArray(res.data) ? res.data : [];
+            const data = res?.data || {};
+            const items = Array.isArray(data?.data) ? data.data : [];
+
+            // normalisasi output biar mirip response lama yang kamu pakai di robot.js
+            const resolvedNopol = String(data?.resolvedNopol || "").trim().toUpperCase();
+
             return {
-                ok: true,
-                nopol: plate,
-                items: arr,
-                leasing: arr.length ? resolveLeasingFromItem(arr[0]) : "",
-                raw: arr,
+                ok: Boolean(data?.ok),
+                input,
+                nopol: resolvedNopol || "",     // penting: hasil resolved
+                resolvedNopol: resolvedNopol || "",
+                resolvedFrom: data?.resolvedFrom || "",
+                count: Number(data?.count ?? items.length ?? 0),
+                items,
+                leasing: items.length ? resolveLeasingFromItem(items[0]) : "",
+                raw: data,
             };
         },
-        30 * 1000 // TTL 30 detik (bisa kamu ubah)
+        30 * 1000
     );
+}
+
+// kompat: kalau ada pemanggilan lama
+export async function getAccessHistoryByNopol(nopolOrParam) {
+    return getAccessHistoryByParam(nopolOrParam);
 }
 
 export function extractLeasingFromHistoryResponse(historyRes) {

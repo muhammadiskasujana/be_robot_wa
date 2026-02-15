@@ -35,7 +35,8 @@ export function normalizePhone(senderJid = "") {
  *  banjarmasin
  *  jakarta"
  */
-export function parseCommandV2(text) {
+export function parseCommandV2(text, opts = {})  {
+    const modeKey = String(opts?.modeKey || "").toLowerCase();
     const cleaned = normalizeText(text);
     if (!cleaned) return { key: "", args: [], argsLines: [] };
 
@@ -110,6 +111,12 @@ export function parseCommandV2(text) {
         return { key: "input_data_r4", args: [], argsLines: [] };
     }
 
+    // ✅ hapus (khusus quote)
+// contoh: reply notif lalu ketik "hapus"
+    if (first === "hapus") {
+        return { key: "delete_nopol", args: [], argsLines: lines.slice(1), meta: { quotedOnly: true } };
+    }
+
     if (first.startsWith("hapus nopol")) {
         const after = first.replace("hapus nopol", "").trim(); // bisa "fif"
         return { key: "delete_nopol", args: after ? [after] : [], argsLines: lines.slice(1) };
@@ -121,11 +128,28 @@ export function parseCommandV2(text) {
         return { key: "cek_nopol", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
+    // cek DA1234BC (khusus gateway)
+    if (first.startsWith("cek ")) {
+        const after = first.replace("cek ", "").trim();
+
+        // hanya aktif kalau mode gateway
+        if (String(modeKey || "").toLowerCase() === "gateway") {
+            return { key: "cek_nopol", args: after ? [after] : [], argsLines: lines.slice(1) };
+        }
+    }
 
     // history AB1234CD
     if (first.startsWith("history")) {
         const after = first.replace("history", "").trim();
         return { key: "history", args: after ? [after] : [], argsLines: lines.slice(1) };
+    }
+
+    // tarik report juli 2025
+// tarik report 11 juli 2025
+// tarik report hari ini
+    if (first.startsWith("tarik report")) {
+        const after = first.replace("tarik report", "").trim();
+        return { key: "tarik_report", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
     // request lokasi 08123...

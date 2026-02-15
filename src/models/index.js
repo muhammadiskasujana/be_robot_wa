@@ -22,6 +22,7 @@ import WaCreditTransactionDef from "./WaCreditTransaction.js";
 
 import PtCompanyDef from "./PtCompany.js";
 import WaGroupSubscriptionDef from "./WaGroupSubscription.js";
+import defineWaDeleteHistory from "./WaDeleteHistory.js";
 
 const { DataTypes } = Sequelize;
 
@@ -53,6 +54,7 @@ export const WaCreditTransaction = WaCreditTransactionDef(sequelize, DataTypes);
 
 export const PtCompany = PtCompanyDef(sequelize, DataTypes);
 export const WaGroupSubscription = WaGroupSubscriptionDef(sequelize, DataTypes);
+export const WaDeleteHistory = defineWaDeleteHistory(sequelize, DataTypes);
 
 AdminUser.hasMany(AdminRefreshToken, { foreignKey: "user_id", as: "refreshTokens" });
 AdminRefreshToken.belongsTo(AdminUser, { foreignKey: "user_id", as: "user" });

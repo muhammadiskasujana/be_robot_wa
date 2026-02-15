@@ -1,4 +1,6 @@
 // src/services/billingService.js
+import Sequelize from "sequelize";
+
 import {
     WaCommand,
     WaCommandPolicy,
@@ -18,6 +20,8 @@ import {
     CacheInvalidate,
 } from "./cacheService.js";
 
+const { Op } = Sequelize;
+
 function up(v) {
     return String(v || "").trim().toUpperCase();
 }
@@ -33,6 +37,42 @@ function clampMin(n, min = 1) {
 
 function nowDate() {
     return new Date();
+}
+
+// cache key bebas: sub/ovd kamu sudah, ini khusus cabang billing
+export async function resolvePersonalAssigneeForCabangCached({ group, command_id, cabang }) {
+    const cab = up(cabang);
+    if (!cab) return null;
+
+    const cacheKey = `pol:assign:g:${group.id}:c:${command_id}:b:${cab}`;
+
+    return fetchJSON(
+        cacheKey,
+        async () => {
+            // PERSONAL policy yg meta.cabang mengandung cabang
+            // + diikat ke group (recommended) atau minimal match leasing
+            const row = await WaCommandPolicy.findOne({
+                where: {
+                    scope_type: "PERSONAL",
+                    command_id,
+                    is_enabled: true,
+                    [Op.and]: [
+                        { [Op.or]: [{ group_id: null }, { group_id: group.id }] },
+                        { [Op.or]: [{ leasing_id: null }, { leasing_id: group.leasing_id || null }] },
+
+                        // JSONB contains: meta.cabang @> ['BANJARBARU']
+                        { meta: { cabang: { [Op.contains]: [cab] } } },
+                    ],
+                },
+                order: [["created_at", "ASC"]], // deterministic kalau ada beberapa orang untuk cabang sama
+                attributes: ["phone_e164", "meta"],
+            });
+
+            if (!row?.phone_e164) return null;
+            return { phone_e164: row.phone_e164, meta: row.meta || null };
+        },
+        30 * 1000
+    );
 }
 
 /**
@@ -141,9 +181,21 @@ export async function resolvePolicyCached({ group, commandKey, phone_e164 = null
         const pp = await fetchJSON(
             CacheKeys.policyPersonal?.(phone_e164, command_id) || `pol:p:${phone_e164}:c:${command_id}`,
             async () => {
-                const row = await WaCommandPolicy.findOne({
-                    where: { scope_type: "PERSONAL", phone_e164, command_id },
-                });
+                const wherePersonal = {
+                    scope_type: "PERSONAL",
+                    phone_e164,
+                    command_id,
+                    is_enabled: true,
+                    [Op.and]: [
+                        // kalau row punya group_id, harus match group.id
+                        { [Op.or]: [{ group_id: null }, { group_id: group.id }] },
+
+                        // kalau row punya leasing_id, harus match group.leasing_id
+                        { [Op.or]: [{ leasing_id: null }, { leasing_id: group.leasing_id || null }] },
+                    ],
+                };
+
+                const row = await WaCommandPolicy.findOne({ where: wherePersonal });
                 return row ? row.toJSON() : null;
             },
             60 * 1000
@@ -248,7 +300,10 @@ async function ensureWallet(target, t) {
         wallet = await WaCreditWallet.create({ ...where, balance: 0, is_active: true, meta: null }, { transaction: t });
     }
     return wallet;
+
 }
+
+
 
 /**
  * =========================
@@ -266,8 +321,11 @@ export async function checkAndDebit({
                                         ref_type = "WA_MESSAGE",
                                         ref_id = null,
                                         notes = null,
+                                        debit = true,          // ✅ tambahan
+                                        units = 1,            // ✅ tambahan
+                                        wallet_scope_override = null, // ✅ tambahan
                                     }) {
-    const pol = await resolvePolicyCached({ group, commandKey });
+    const pol = await resolvePolicyCached({ group, commandKey,phone_e164 });
     if (!pol.ok) {
         return { ok: false, allowed: false, error: pol.error };
     }
@@ -341,11 +399,56 @@ export async function checkAndDebit({
     // CREDIT
     // ======================
     // backward compatible: kalau billing_mode gak valid tapi use_credit true -> tetap debit
-    const cost = clampMin(pol.credit_cost || 1, 1);
-    const tgt = resolveWalletTarget({ group, wallet_scope: pol.wallet_scope, phone_e164 });
+    const u = Math.max(1, parseInt(units, 10) || 1);
+    const costPerUnit = clampMin(pol.credit_cost || 1, 1);
+    const cost = costPerUnit * u; // ✅ total debit
+    const ws = wallet_scope_override ? up(wallet_scope_override) : up(pol.wallet_scope || "GROUP");
+    const tgt = resolveWalletTarget({ group, wallet_scope: ws, phone_e164 });
 
     if (!tgt.ok) {
         return { ok: false, allowed: false, error: tgt.error, policy: pol };
+    }
+
+    // ✅ PRECHECK (tanpa debit)
+    if (debit === false) {
+        try {
+            // no lock heavy: cukup pastikan wallet ada, cek saldo
+            const wallet = await sequelize.transaction(async (t) => {
+                const w0 = await ensureWallet(tgt, t);
+                const w = await WaCreditWallet.findByPk(w0.id, { transaction: t, lock: t.LOCK.UPDATE });
+                return w;
+            });
+
+            const bal = toInt(wallet.balance, 0);
+            if (!wallet.is_active) {
+                return { ok: true, allowed: false, charged: false, billing_mode: "CREDIT", error: "Wallet nonaktif", policy: pol };
+            }
+
+            if (bal < cost) {
+                return {
+                    ok: true,
+                    allowed: false,
+                    charged: false,
+                    billing_mode: "CREDIT",
+                    error: `Kredit habis. Saldo: ${bal}, biaya: ${cost}`,
+                    policy: pol,
+                    credit_cost: cost,
+                    balance_after: bal,
+                };
+            }
+
+            return {
+                ok: true,
+                allowed: true,
+                charged: false,
+                billing_mode: "CREDIT",
+                policy: pol,
+                credit_cost: cost,
+                balance_after: bal,
+            };
+        } catch (e) {
+            return { ok: false, allowed: false, error: e.message, policy: pol };
+        }
     }
 
     const refId = ref_id || webhook?.idMessage || null;

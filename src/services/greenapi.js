@@ -1,20 +1,9 @@
 import axios from "axios";
 import https from "https";
+import FormData from "form-data";
 
 const httpsAgent = new https.Agent({ keepAlive: true });
 
-// export async function sendText({ idInstance, apiToken, chatId, message, quotedMessageId }) {
-//     const url = `https://api.green-api.com/waInstance${idInstance}/sendMessage/${apiToken}`;
-//
-//     const payload = { chatId, message };
-//     if (quotedMessageId) payload.quotedMessageId = quotedMessageId;
-//
-//     const res = await axios.post(url, payload, {
-//         timeout: 15000,
-//         httpsAgent,
-//     });
-//     return res.data;
-// }
 
 export async function sendText(ctx) {
     const t0 = Date.now();
@@ -27,27 +16,44 @@ export async function sendText(ctx) {
                 ...(ctx.quotedMessageId ? { quotedMessageId: ctx.quotedMessageId } : {}),
             },
             {
-                timeout: 8000,          // ⬅️ turunkan dari 15s
+                timeout: 8000,
                 httpsAgent,
-                validateStatus: () => true, // jangan throw otomatis
+                validateStatus: () => true, // jangan auto throw
             }
         );
 
-        console.log(
-            "[sendText]",
-            ctx.chatId,
-            "status=", res.status,
-            "ms=", Date.now() - t0
-        );
+        const ms = Date.now() - t0;
+        const body = res.data;
 
-        return res.data;
+        const msgId = body?.idMessage || body?.messageId;
+
+        console.log("[sendText]", {
+            chatId: ctx.chatId,
+            instance: ctx.idInstance,
+            status: res.status,
+            ms,
+            hasMessageId: !!msgId,
+            quoted: !!ctx.quotedMessageId,
+            len: (ctx.message || "").length,
+            response: body,
+        });
+
+        // ⛔ WAJIB: kalau tidak ada idMessage → anggap gagal
+        if (res.status !== 200 || !msgId) {
+            throw new Error(
+                `GreenAPI send failed: status=${res.status} body=${JSON.stringify(body)}`
+            );
+        }
+
+        return body;
     } catch (err) {
-        console.log(
-            "[sendText ERROR]",
-            ctx.chatId,
-            "ms=", Date.now() - t0,
-            err.message
-        );
+        console.log("[sendText ERROR]", {
+            chatId: ctx.chatId,
+            instance: ctx.idInstance,
+            ms: Date.now() - t0,
+            error: err.message,
+        });
         throw err;
     }
 }
+

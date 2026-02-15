@@ -14,9 +14,7 @@ async function getWaInstanceCached(idInstance) {
                 where: {
                     id_instance: idInstance,
                     is_active: true,
-                    [Op.and]: [
-                        Sequelize.literal(`(meta->'roles') @> '["BOT"]'::jsonb`)
-                    ],
+                    [Op.and]: [Sequelize.literal(`(meta->'roles') @> '["BOT"]'::jsonb`)],
                 },
                 attributes: ["id_instance", "api_token", "meta"],
             });
@@ -26,7 +24,6 @@ async function getWaInstanceCached(idInstance) {
     );
 }
 
-
 const router = express.Router();
 
 function verifySecret(req) {
@@ -35,44 +32,74 @@ function verifySecret(req) {
     return req.query.secret === need;
 }
 
+function pickChatId(body) {
+    return (
+        body?.senderData?.chatId ||
+        body?.destinationData?.chatId ||
+        body?.destinationData?.chatId || // keep
+        body?.destinationData?.to ||      // kadang di sini
+        body?.destinationData?.recipientId ||
+        body?.chatId ||
+        body?.messageData?.chatId ||
+        null
+    );
+}
+
+function pickSender(body) {
+    return body?.senderData?.sender || body?.senderData?.from || null;
+}
 
 function buildSlimWebhook(body) {
-    const typeMessage = body?.messageData?.typeMessage;
+    const typeWebhook = body?.typeWebhook || null;
 
-    const text =
-        body?.messageData?.textMessageData?.textMessage ||
-        body?.messageData?.extendedTextMessageData?.text ||
-        body?.messageData?.quotedMessage?.textMessage ||
+    const status =
+        body?.status ||
+        body?.messageData?.statusMessage ||
+        body?.messageData?.status ||
+        body?.state ||
         null;
 
-    // kalau gambar/dokumen, simpan info file minimal (bukan base64 / payload besar)
-    const file =
-        body?.messageData?.fileMessageData
-            ? {
-                fileName: body?.messageData?.fileMessageData?.fileName || null,
-                mimeType: body?.messageData?.fileMessageData?.mimeType || null,
-                caption: body?.messageData?.fileMessageData?.caption || null,
-            }
-            : null;
+    const statusReason =
+        body?.reason ||
+        body?.statusReason ||
+        body?.error ||
+        body?.errorDescription ||
+        body?.message ||
+        body?.description ||
+        body?.messageData?.error ||
+        body?.messageData?.errorMessage ||
+        body?.messageData?.statusReason ||
+        body?.messageData?.reason ||
+        body?.messageData?.message ||
+        body?.messageData?.description ||
+        body?.notificationData?.error ||
+        body?.notificationData?.description ||
+        null;
 
     return {
-        // meta utama
-        typeWebhook: body?.typeWebhook || null,
+        typeWebhook,
         idMessage: body?.idMessage || null,
         timestamp: body?.timestamp || null,
-
-        // instance
         idInstance: body?.instanceData?.idInstance || null,
 
-        // sender
-        chatId: body?.senderData?.chatId || null,
+        chatId: pickChatId(body),
+        // outgoing biasanya ga punya sender, jadi aman null
         sender: body?.senderData?.sender || null,
-        chatName: body?.senderData?.chatName || null,
+        chatName: body?.senderData?.chatName || body?.destinationData?.chatName || null,
 
-        // message
-        typeMessage: typeMessage || null,
-        text,
-        file,
+        typeMessage: body?.messageData?.typeMessage || null,
+
+        status,
+        statusReason,
+
+        // simpan potongan destinationData untuk debug
+        destination: body?.destinationData
+            ? {
+                chatId: body.destinationData.chatId || null,
+                to: body.destinationData.to || null,
+                recipientId: body.destinationData.recipientId || null,
+            }
+            : null,
     };
 }
 
@@ -80,29 +107,22 @@ router.post("/greenapi", async (req, res) => {
     try {
         if (!verifySecret(req)) return res.status(401).json({ ok: false, error: "invalid secret" });
 
-        const body = req.body;
-
-        if (body?.typeWebhook !== "incomingMessageReceived") {
-            return res.json({ ok: true, ignored: true });
-        }
+        const body = req.body || {};
+        const type = body?.typeWebhook;
 
         const idInstance = Number(body?.instanceData?.idInstance);
         const idMessage = body?.idMessage;
-        if (!idInstance || !idMessage) return res.json({ ok: true, ignored: true, reason: "missing fields" });
 
-        // ✅ ACK CEPAT (paling penting)
+        // ✅ ACK cepat untuk SEMUA webhook supaya GreenAPI tidak retry
         res.json({ ok: true, accepted: true });
 
-        // ==== proses di belakang (tidak block webhook) ====
+        // ==== proses background ====
         (async () => {
-            // ambil instance token
-            // const instance = await WaInstance.findOne({ where: { id_instance: idInstance, is_active: true } });
-            // if (!instance) return;
-            const instance = await getWaInstanceCached(idInstance);
-            if (!instance?.id_instance || !instance?.api_token) return;
+            if (!idInstance || !idMessage) return;
 
             const slimBody = buildSlimWebhook(body);
 
+            // Simpan semua webhook (incoming + outgoing) agar bisa trace delivery
             try {
                 await WaMessageLog.create({
                     id_instance: idInstance,
@@ -111,17 +131,37 @@ router.post("/greenapi", async (req, res) => {
                     sender: slimBody.sender,
                     type_webhook: slimBody.typeWebhook,
                     type_message: slimBody.typeMessage,
-                    body: slimBody, // ✅ slim saja
+                    body: slimBody,
                 });
             } catch (e) {
-                return; // duplicate => stop
+                // duplicate -> skip
             }
 
-            // await handleIncoming({ instance, webhook: body });
-            await handleIncoming({
-                instance: { id_instance: instance.id_instance, api_token: instance.api_token },
-                webhook: body,
-            });
+            // ====== INCOMING saja yang diproses bot ======
+            if (type === "incomingMessageReceived") {
+                const instance = await getWaInstanceCached(idInstance);
+                if (!instance?.id_instance || !instance?.api_token) return;
+
+                await handleIncoming({
+                    instance: { id_instance: instance.id_instance, api_token: instance.api_token },
+                    webhook: body,
+                });
+                return;
+            }
+
+            // ====== OUTGOING status: log untuk debug ======
+            if (type === "outgoingMessageStatus" || type === "outgoingAPIMessageReceived") {
+                console.log("[GREENAPI OUTGOING]", {
+                    idInstance,
+                    idMessage,
+                    chatId: slimBody.chatId,
+                    status: slimBody.status,
+                    reason: slimBody.statusReason,
+                    destination: slimBody.destination,
+                    keys: Object.keys(body || {}),
+                    messageDataKeys: Object.keys(body?.messageData || {}),
+                });
+            }
         })().catch((err) => console.error("BG webhook error:", err?.message || err));
     } catch (err) {
         console.error("Webhook error:", err?.message || err);

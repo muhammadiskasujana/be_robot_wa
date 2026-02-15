@@ -1,5 +1,4 @@
-// services/historyFormatter.js
-
+// services/historyFormatter.js (UPDATE)
 function safe(s, fallback = "-") {
     const t = String(s ?? "").trim();
     return t ? t : fallback;
@@ -51,7 +50,10 @@ export function formatHistoryMessage({ nopol, leasing, items, page = 1, perPage 
             const pt = safe(x?.userPt, "Tanpa PT");
             const waktu = safe(x?.accessDate, "-");
 
-            // reportAwal / reportAkhir kadang null, kadang string, kadang object
+            // ✅ tambahan: admin PT
+            const adminPT = safe(x?.adminPT, "-");
+            const noHpAdmin = safe(x?.noHpAdmin, "-");
+
             const awal =
                 typeof x?.reportAwal === "string"
                     ? x.reportAwal
@@ -68,15 +70,14 @@ export function formatHistoryMessage({ nopol, leasing, items, page = 1, perPage 
                 `*Nama: ${name}*\n` +
                 `*HP : (${hp})*\n` +
                 `PT : ${pt}\n` +
+                `PIC PT : ${adminPT}\n` +        // ✅
+                `No HP PIC : ${noHpAdmin}\n` +   // ✅
                 `Waktu Akses : ${waktu}`;
 
             if (awal) out += `\nKronologis Awal : ${awal}`;
             if (akhir) out += `\nKronologis Akhir : ${akhir}`;
 
-            if (mapsLink) {
-                out += `\nLokasi : ${mapsLink}`;
-                // Address belum ada (nanti kalau ada API reverse geocode kita isi)
-            }
+            if (mapsLink) out += `\nLokasi : ${mapsLink}`;
 
             out += `\n*================*`;
             return out;
