@@ -12,6 +12,7 @@ import {
 
 import { sendText } from "./greenapi.js";
 import { fetchAccessReportXlsx } from "./tarikreport/reportsAccess.js";
+import { fetchRekapDataXlsx } from "./rekapJumlahData/fetchRekapDataXlsx.js";
 import { saveTempXlsx } from "./tempReportStore.js"; // sesuaikan path
 import {normalizePhone, extractText, isGroupChat, parseCommandV2, normalizeText} from "./parser.js";
 
@@ -23,6 +24,7 @@ import { getAccessHistoryByNopol } from "./history/newhunterHistory.js";
 import { formatHistoryMessage, resolveLeasingFromItems } from "./history/historyFormatter.js";
 // robot.js (tambahkan import di atas)
 import { cekNopolFromApi, formatCekNopolMessage } from "./cekNopol/newhunterCekNopol.js";
+import { isSenderAdminGroup } from "./greenapiGroups.js";
 
 import {fetchJson,  fetchBool, fetchString, TTL, CacheKeys, CacheInvalidate } from "./cacheService.js";
 import { getDeleteReasonByNumber, DELETE_REASONS } from "./deleteNopol/deleteReasons.js";
@@ -44,6 +46,12 @@ async function isMasterPhoneCached(phone) {
         },
         TTL.AUTH_SHORT
     );
+}
+
+async function requireMasterOrReply({ master, ctx, sendText }) {
+    if (master) return true;
+    await sendText({ ...ctx, message: "❌ Hanya master yang dapat menjalankan perintah." });
+    return false;
 }
 
 async function checkWhitelistCached(phone) {
@@ -88,6 +96,47 @@ async function getOrCreateGroup(chatId, title) {
         leasing_branch_id: null,
     });
     return group;
+}
+
+function izinMode(group) {
+    return String(group?.izin_group || "UMUM").trim().toUpperCase();
+}
+
+// command yang “kena aturan izin_group”
+const GUARDED_COMMANDS = new Set([
+    "cek_nopol",
+    "history",
+    "request_lokasi",
+    "tarik_report",
+    "delete_nopol",
+    "input_data",
+    "input_data_r2",
+    "input_data_r4",
+]);
+
+async function enforceGroupPermission({ key, group, master, ctx, chatId, senderJid }) {
+    // master selalu lolos
+    if (master) return { ok: true };
+
+    // kalau command tidak diguard, biarkan
+    if (!GUARDED_COMMANDS.has(key)) return { ok: true };
+
+    // UMUM = semua boleh
+    const mode = izinMode(group);
+    if (mode === "UMUM") return { ok: true };
+
+    // ADMIN = hanya admin group
+    const isAdmin = await isSenderAdminGroup({
+        ctx,
+        groupChatId: chatId,
+        senderJid,
+    });
+
+    if (!isAdmin) {
+        return { ok: false, error: "❌ Command ini hanya bisa dijalankan oleh admin group." };
+    }
+
+    return { ok: true };
 }
 
 async function ensureModeLeasing(group) {
@@ -958,14 +1007,14 @@ export async function handleIncoming({ instance, webhook }) {
 
     // on/off robot
     if (key === "robot_on") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
         group.is_bot_enabled = true;
         await group.save();
         await sendText({ ...ctx, message: "✅ Robot diaktifkan untuk group ini." });
         return;
     }
     if (key === "robot_off") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
         group.is_bot_enabled = false;
         await group.save();
         await sendText({ ...ctx, message: "⛔ Robot dimatikan untuk group ini." });
@@ -975,15 +1024,70 @@ export async function handleIncoming({ instance, webhook }) {
     // kalau bot mati, stop selain command master yang menghidupkan / help
     if (!group.is_bot_enabled) return;
 
+    // ===== Permission guard berbasis izin_group (UMUM/ADMIN) =====
+    const perm = await enforceGroupPermission({
+        key,
+        group,
+        master,
+        ctx,
+        chatId,
+        senderJid: webhook?.senderData?.sender,
+    });
+
+    if (!perm.ok) {
+        console.log(perm.error)
+        await sendText({ ...ctx, message: perm.error });
+        return;
+    }
+
     if (key === "ping") {
         await sendText({ ...ctx, message: "pong ✅" });
+        return;
+    }
+
+    // ===== set izin umum/admin (master-only) =====
+    // ===== set izin umum/admin (master-only) =====
+    if (key === "set_izin") {
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
+
+        // ambil arg dari args, argsLines, atau dari text mentah
+        const joinedArgs = []
+            .concat(args || [])
+            .concat(argsLines || [])
+            .filter(Boolean)
+            .join(" ")
+            .trim()
+            .toLowerCase();
+
+        // fallback terakhir: cari "set izin xxx" dari text
+        const fallback = String(text || "").trim().toLowerCase();
+        const m = fallback.match(/^set\s+izin\s+(umum|admin)\b/);
+
+        const pick = joinedArgs || (m ? m[1] : "");
+        const v = pick === "admin" ? "ADMIN" : pick === "umum" ? "UMUM" : null;
+
+        if (!v) {
+            await sendText({ ...ctx, message: "❌ Format: set izin umum | set izin admin" });
+            return;
+        }
+
+        group.izin_group = v;
+        await group.save();
+
+        await sendText({
+            ...ctx,
+            message:
+                v === "ADMIN"
+                    ? "✅ Izin group diset: ADMIN.\nSekarang command umum hanya bisa dipakai admin group."
+                    : "✅ Izin group diset: UMUM.\nSekarang semua member group bisa pakai command umum.",
+        });
         return;
     }
 
 
     // set mode leasing / input data / pt / gateway
     if (key === "set_mode") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
 
         // args bisa ["input","data"] atau ["leasing"] atau ["pt"] atau ["gateway"]
         const raw = [args[0], args[1]].filter(Boolean).join(" ").toLowerCase().trim();
@@ -1044,7 +1148,7 @@ export async function handleIncoming({ instance, webhook }) {
 
     // set leasing adira
     if (key === "set_leasing") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
         const code = (args[0] || "").toUpperCase();
         const r = await setLeasing(group, code);
         if (!r.ok) {
@@ -1062,7 +1166,7 @@ export async function handleIncoming({ instance, webhook }) {
 
     // unset leasing
     if (key === "unset_leasing") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
 
         const r = await unsetLeasing(group);
         if (!r.ok) {
@@ -1081,7 +1185,7 @@ export async function handleIncoming({ instance, webhook }) {
 
     // tambah cabang ...
     if (key === "add_branch") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
 
         const r = await addBranchesAutoLevel(group, args[0] || "", argsLines);
         if (!r.ok) {
@@ -1100,7 +1204,7 @@ export async function handleIncoming({ instance, webhook }) {
     }
 
     if (key === "del_branch") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
 
         const r = await removeBranchesAutoLevel(group, args[0] || "", argsLines);
         if (!r.ok) {
@@ -1157,7 +1261,7 @@ export async function handleIncoming({ instance, webhook }) {
 
     // ===== start / stop group (toggle notif_data_access_enabled) =====
     if (key === "group_start") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
 
         group.notif_data_access_enabled = true;
         await group.save();
@@ -1170,7 +1274,7 @@ export async function handleIncoming({ instance, webhook }) {
     }
 
     if (key === "group_stop") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
 
         group.notif_data_access_enabled = false;
         await group.save();
@@ -1779,7 +1883,7 @@ export async function handleIncoming({ instance, webhook }) {
 
     // command: set pt <kode>
     if (key === "set_pt") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
 
         const code = (args[0] || "").trim();
         const r = await setPt(group, code);
@@ -1800,16 +1904,18 @@ export async function handleIncoming({ instance, webhook }) {
 
 // optional: unset pt
     if (key === "unset_pt") {
-        if (!master) return;
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
         group.pt_company_id = null;
         await group.save();
         await sendText({ ...ctx, message: "✅ PT group dihapus (unset)." });
         return;
     }
 
+
+
     if (key === "tarik_report") {
         // master-only atau boleh semua? aku bikin master-only biar aman
-        if (!master) return;
+        // if (!master) return;
 
         // leasing wajib dari group
         if (!group.leasing_id) {
@@ -1891,6 +1997,50 @@ export async function handleIncoming({ instance, webhook }) {
             });
         } catch (e) {
             await sendText({ ...ctx, message: `❌ Gagal tarik report.\n${e?.message || "Unknown error"}` });
+        }
+
+        return;
+    }
+
+    if (key === "rekap_data") {
+        // leasing wajib dari group
+        if (!group.leasing_id) {
+            await sendText({ ...ctx, message: "❌ Leasing group belum diset. Jalankan: set leasing <kode>" });
+            return;
+        }
+
+        const leasingRow = await LeasingCompany.findByPk(group.leasing_id, { attributes: ["code"] });
+        const leasingCode = String(leasingRow?.code || "").trim().toUpperCase();
+        if (!leasingCode) {
+            await sendText({ ...ctx, message: "❌ Leasing group invalid." });
+            return;
+        }
+
+        const baseUrl = "https://api.digitalmanager.id";
+
+        await sendText({ ...ctx, message: "⏳ Sedang tarik rekap data excel..." });
+
+        try {
+            const buf = await fetchRekapDataXlsx({
+                baseUrl,
+                leasing: leasingCode,
+            });
+
+            const filename = `rekap-data-${leasingCode}-${Date.now()}.xlsx`;
+            const meta = await saveTempXlsx(buf, filename);
+
+            const PUBLIC_BASE = process.env.PUBLIC_BASE_URL;
+            const link = `${PUBLIC_BASE}/api/temp-reports/dl/report/${meta.token}`;
+
+            await sendText({
+                ...ctx,
+                message:
+                    `✅ Rekap data siap.\n` +
+                    `Leasing: ${leasingCode}\n\n` +
+                    `⬇️ Download (berlaku 5 menit):\n${link}`,
+            });
+        } catch (e) {
+            await sendText({ ...ctx, message: `❌ Gagal tarik rekap.\n${e?.message || "Unknown error"}` });
         }
 
         return;

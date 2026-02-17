@@ -26,6 +26,27 @@ export function normalizePhone(senderJid = "") {
     return digits.startsWith("0") ? "62" + digits.slice(1) : digits;
 }
 
+function cleanAfterCommand(s = "") {
+    return String(s || "")
+        // buang simbol pembuka yang sering dipakai: ":" "," "-" "|" "=" dll
+        .replace(/^[\s:;,|=\-–—]+/, "")
+        // rapikan spasi
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+// khusus list nopol (biar "B 1234 CD, D-5555-EE" jadi enak diparse)
+function cleanPlateListText(s = "") {
+    return String(s || "")
+        .replace(/^[\s:;,|=\-–—]+/, "")
+        // samakan delimiter jadi spasi
+        .replace(/[,\|;/]+/g, " ")
+        // hapus karakter aneh tapi biarkan huruf/angka/spasi
+        .replace(/[^\w\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
 /**
  * Parse command berbasis kalimat.
  * - Support multiline, argsLines berisi baris setelah baris pertama.
@@ -83,6 +104,12 @@ export function parseCommandV2(text, opts = {})  {
     // alias biar natural
     if (first === "hapus pt") return { key: "unset_pt", args: [], argsLines: lines.slice(1) };
 
+    // juga dukung: "set pt" multiline (opsional)
+    if (first.startsWith("set izin ")) {
+        const val = first.replace("set izin ", "").trim(); // "admin" / "umum"
+        return { key: "set_izin", args: val ? [val] : [], argsLines: lines.slice(1) };
+    }
+
     // start/stop group untuk akses notif data (master-only di handler)
     if (first === "start group") return { key: "group_start", args: [], argsLines: lines.slice(1) };
     if (first === "stop group") return { key: "group_stop", args: [], argsLines: lines.slice(1) };
@@ -118,7 +145,8 @@ export function parseCommandV2(text, opts = {})  {
     }
 
     if (first.startsWith("hapus nopol")) {
-        const after = first.replace("hapus nopol", "").trim(); // bisa "fif"
+        const rawAfter = first.replace("hapus nopol", "");
+        const after = cleanPlateListText(rawAfter); // ✅ cleansing
         return { key: "delete_nopol", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
@@ -150,6 +178,19 @@ export function parseCommandV2(text, opts = {})  {
     if (first.startsWith("tarik report")) {
         const after = first.replace("tarik report", "").trim();
         return { key: "tarik_report", args: after ? [after] : [], argsLines: lines.slice(1) };
+    }
+
+    // rekap jumlah data
+// contoh:
+// - "rekap jumlah data"
+// - "rekap data"
+// - "tarik rekap"
+// - "rekap"
+    if (
+        first === "rekap jumlah data"
+    ) {
+        // belum perlu args (leasing diambil dari group setting)
+        return { key: "rekap_data", args: [], argsLines: lines.slice(1) };
     }
 
     // request lokasi 08123...

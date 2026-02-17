@@ -13,9 +13,10 @@ export const TTL = {
     JSON: 10 * 60 * 1000,
     GROUP_SHORT: 10 * 1000,
     LEASING_CODE: 60 * 60 * 1000,
-
+    GROUP_ADMINS: 60, // detik (atau 120)
     // ✅ optional
     NEGATIVE_SHORT: 10 * 1000, // cache "not found" 10 detik (opsional)
+
 };
 
 export const CacheKeys = {
@@ -29,6 +30,7 @@ export const CacheKeys = {
     group: (chatId) => `group:${chatId}`,
     leasingCode: (leasingId) => `leasing:code:${leasingId}`,
     policyPersonal: (phone, commandId) => `policy:personal:${phone}:cmd:${commandId}`,
+    groupAdmins: (chatId) => `wa:group_admins:${chatId}`,
 };
 
 // ===== anti-stampede (dedupe concurrent miss) =====

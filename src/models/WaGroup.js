@@ -34,6 +34,11 @@ export default (sequelize, DataTypes) =>
 
                 // ✅ PT MODE
                 pt_company_id: { type: DataTypes.UUID },
+                izin_group: {
+                     type: DataTypes.STRING(10), // UMUM / ADMIN
+                    allowNull: false,
+                    defaultValue: "UMUM",
+                },
 
                 meta: { type: DataTypes.JSONB },
         },

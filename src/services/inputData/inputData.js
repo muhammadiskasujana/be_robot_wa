@@ -4,6 +4,17 @@ function up(s) {
     return String(s || "").trim().toUpperCase();
 }
 
+function cleanIdValue(v = "") {
+    // untuk NOPOL / NOSIN / NOKA:
+    // - buang spasi
+    // - buang simbol aneh
+    // - sisakan huruf & angka saja
+    return String(v || "")
+        .toUpperCase()
+        .replace(/\s+/g, "")
+        .replace(/[^A-Z0-9]/g, "");
+}
+
 export function buildInputTemplate({ modeKey, type }) {
     const isLeasingMode = modeKey === "leasing";
     const t = String(type || "").toUpperCase(); // R2 / R4
@@ -44,18 +55,19 @@ export function parseFilledTemplate(textRaw) {
     for (const line of lines.slice(1)) {
         const idx = line.indexOf(":");
         if (idx === -1) continue;
-        const k = up(line.slice(0, idx));
-        const v = line.slice(idx + 1).trim();
-        if (!v) continue;
 
-        if (k === "NOPOL") data.nopol = up(v);
-        else if (k === "NOSIN") data.nosin = up(v);
-        else if (k === "NOKA") data.noka = up(v);
-        else if (k === "TIPE") data.tipe = up(v);
-        else if (k === "LEASING") data.leasing = up(v);
-        else if (k === "CABANG") data.cabang = up(v);
-        else if (k === "OVD") data.ovd = up(v);
-        else if (k === "KETERANGAN") data.keterangan = v;
+        const k = up(line.slice(0, idx));
+        const rawV = line.slice(idx + 1).trim();
+        if (!rawV) continue;
+
+        if (k === "NOPOL") data.nopol = cleanIdValue(rawV);     // ✅
+        else if (k === "NOSIN") data.nosin = cleanIdValue(rawV); // ✅
+        else if (k === "NOKA") data.noka = cleanIdValue(rawV);   // ✅
+        else if (k === "TIPE") data.tipe = up(rawV);
+        else if (k === "LEASING") data.leasing = up(rawV);
+        else if (k === "CABANG") data.cabang = up(rawV);
+        else if (k === "OVD") data.ovd = up(rawV);
+        else if (k === "KETERANGAN") data.keterangan = rawV; // biarkan apa adanya
     }
 
     return { type, data };
