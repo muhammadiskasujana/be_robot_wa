@@ -25,6 +25,8 @@ export default (sequelize, DataTypes) =>
                         defaultValue: false,
                 },
 
+                manage_target: { type: DataTypes.STRING(255) }, // contoh: "AKTIVASI,HAPUS_USER"
+
                 mode_id: { type: DataTypes.UUID },
 
                 // leasing

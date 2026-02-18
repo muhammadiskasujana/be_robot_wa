@@ -7,6 +7,8 @@ import { QueryTypes } from "sequelize";
 import { checkAndDebit, resolvePolicyCached } from "../services/billingService.js";
 import { WaCommandPolicy, sequelize } from "../models/index.js";
 
+import { buildManagementMessage } from "./managementMessage.js";
+
 const { Op } = Sequelize;
 
 // ====== HTTP client (native fetch Node 18+) ======
@@ -36,6 +38,8 @@ const redisConnection = {
 };
 
 const COMMAND_KEY_NOTIF = "data_access_notif";
+const COMMAND_KEY_MGMT_ACTIVATION = "management_activation_notif";
+const COMMAND_KEY_MGMT_GENERIC = "management_event_notif";
 
 // =====================
 // helpers
@@ -45,6 +49,12 @@ function up(v) {
 }
 function low(v) {
     return String(v || "").trim().toLowerCase();
+}
+
+function formatRupiah(n) {
+    const x = Number(String(n ?? "").replace(/[^\d.-]/g, ""));
+    if (!Number.isFinite(x)) return String(n ?? "-");
+    return x.toLocaleString("id-ID");
 }
 
 function normPhone62(s="") {
@@ -355,6 +365,16 @@ async function sendTextViaGateway({ session_id, to, message, mentions = [] }) {
 
     try { return JSON.parse(text); } catch { return { ok: true, raw: text }; }
 }
+
+function mgmtCommandKeyForEvent(eventKey = "") {
+    const k = up(eventKey);
+
+    // ✅ kalau mau policy AKTIVASI tetap pakai yang lama:
+    if (k === "AKTIVASI") return COMMAND_KEY_MGMT_ACTIVATION;
+
+    // event lain pakai generic
+    return COMMAND_KEY_MGMT_GENERIC;
+}
 // =====================
 // Worker Sender (UPDATED: bill individu)
 // =====================
@@ -362,6 +382,113 @@ export const worker = new Worker(
     "wa_notify_send",
     async (job) => {
         const { payload, group, reason } = job.data || {};
+        function getMgmtEventKey(payload) {
+            return up(payload?.event_key || payload?.event_type || payload?.type);
+        }
+
+// =========================================================
+// =============== MANAGEMENT: GENERIC EVENTS ===============
+// =========================================================
+        if (job.name === "management_event_send" || job.name === "notify_management_activation_group") {
+            if (!group?.id || !group?.chat_id) {
+                return { ok: false, error: "invalid group" };
+            }
+
+            const eventKey = getMgmtEventKey(payload) || (job.name === "notify_management_activation_group" ? "AKTIVASI" : "");
+            if (!eventKey) {
+                return { ok: false, error: "missing event_key" };
+            }
+
+            const groupMini = { id: group.id, leasing_id: group.leasing_id || null };
+
+            // commandKey dipilih berdasarkan event
+            const commandKey = mgmtCommandKeyForEvent(eventKey);
+
+            // 1) resolve policy
+            const polBase = await resolvePolicyCached({
+                group: groupMini,
+                commandKey,
+                phone_e164: null,
+            });
+
+            if (!polBase?.ok) {
+                return { ok: false, skipped: "policy_error", error: polBase?.error || "policy_error" };
+            }
+
+            // 2) precheck (tanpa debit)
+            const pre = await checkAndDebit({
+                commandKey,
+                group: groupMini,
+                phone_e164: null,
+                webhook: null,
+                ref_type: "NOTIF_MGMT_EVENT",
+                ref_id: job.id,
+                notes: `mgmt_event ${eventKey} ${payload?.no_hp_user || payload?.hp_user || "-"}|${payload?.nama_user || "-"}`,
+                debit: false,
+            });
+
+            if (!pre.ok) return { ok: false, skipped: "billing_error", error: pre.error };
+            if (!pre.allowed) {
+                return {
+                    ok: true,
+                    skipped: "not_allowed",
+                    billing_mode: pre.billing_mode,
+                    reason: pre.error,
+                    event_key: eventKey,
+                    command_key: commandKey,
+                };
+            }
+
+            // 3) debit
+            const bill = await checkAndDebit({
+                commandKey,
+                group: groupMini,
+                phone_e164: null,
+                webhook: null,
+                ref_type: "NOTIF_MGMT_EVENT",
+                ref_id: job.id,
+                notes: `mgmt_event ${eventKey} ${payload?.no_hp_user || payload?.hp_user || "-"}|${payload?.nama_user || "-"}`,
+                debit: true,
+            });
+
+            if (!bill.ok) return { ok: false, skipped: "billing_error", error: bill.error };
+            if (!bill.allowed) {
+                return {
+                    ok: true,
+                    skipped: "not_allowed",
+                    billing_mode: bill.billing_mode,
+                    reason: bill.error,
+                    event_key: eventKey,
+                    command_key: commandKey,
+                };
+            }
+
+            // 4) send
+            const msg = buildManagementMessage({ ...payload, event_key: eventKey });
+            const sent = await sendWithFallback({
+                to: group.chat_id,
+                message: msg,
+                mentions: [],
+            });
+
+            return {
+                ok: true,
+                sent: true,
+                group_id: group.id,
+                chat_id: group.chat_id,
+                session_id: sent.session_id,
+                reason,
+                billing_mode: bill.billing_mode,
+                charged: bill.charged || false,
+                balance_after: bill.balance_after,
+                event_key: eventKey,
+                command_key: commandKey,
+                legacy_redirect: job.name === "notify_management_activation_group",
+            };
+        }
+
+
+
         if (!payload?.nopol || !payload?.leasing || !group?.id || !group?.chat_id) {
             return { ok: false, error: "invalid job data" };
         }
@@ -499,7 +626,8 @@ export const worker = new Worker(
             bill_phone: billPhone || null,
             cabang: up(cabangPayload) || null,
         };
-    },
+    }
+    ,
     {
         connection: redisConnection,
         concurrency: Number(process.env.NOTIF_SEND_CONCURRENCY || 20),

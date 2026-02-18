@@ -174,7 +174,7 @@ export async function enqueueAccessNotify(req, res) {
         backoff: { type: "exponential", delay: 1000 },
     });
 
-    // console.log("[ENQUEUE] payload:", v.payload);
+    console.log("[ENQUEUE] payload:", v.payload);
 
     res.json({
         ok: true,

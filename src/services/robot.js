@@ -30,6 +30,7 @@ import {fetchJson,  fetchBool, fetchString, TTL, CacheKeys, CacheInvalidate } fr
 import { getDeleteReasonByNumber, DELETE_REASONS } from "./deleteNopol/deleteReasons.js";
 import { parseNopolFromText,parseLeasingCodeFromText,getQuotedText  } from "./deleteNopol/parserDelete.js";
 import Sequelize from "sequelize";
+import {formatRekapJumlahDataText} from "./rekapJumlahData/rekapFormatter.js";
 const { Op } = Sequelize;
 
 
@@ -181,6 +182,62 @@ async function ensureModeGateway(group) {
     return { ok: true, mode };
 }
 
+async function ensureModeManagement(group) {
+    const mode = await WaGroupMode.findOne({ where: { key: "management", is_active: true } });
+    if (!mode) return { ok: false, error: "Mode management belum ada di DB" };
+
+    group.mode_id = mode.id;
+
+    // reset yang bisa bentrok
+    group.leasing_id = null;
+    group.leasing_level = null;
+    group.leasing_branch_id = null;
+    group.pt_company_id = null;
+
+    // ✅ pastikan meta ada
+    group.meta = group.meta || {};
+    if (typeof group.meta !== "object") group.meta = {};
+
+    await group.save();
+    return { ok: true, mode };
+}
+
+function normTargets(input = "") {
+    // "aktivasi, hapus_user" -> ["AKTIVASI","HAPUS_USER"]
+    const s = String(input || "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .toLowerCase();
+
+    if (!s) return [];
+
+    return s
+        .split(/[,\n|]/g)
+        .map((x) => x.trim())
+        .filter(Boolean)
+        .map((x) => x.replace(/\s+/g, "_"))
+        .map((x) => x.toUpperCase());
+}
+
+async function setManageTarget(group, targetRaw) {
+    const targets = normTargets(targetRaw);
+
+    if (!targets.length) {
+        return { ok: false, error: "Target kosong. Contoh: set target aktivasi" };
+    }
+
+    // ✅ field sendiri (string fleksibel)
+    // contoh tersimpan: "AKTIVASI,HAPUS_USER"
+    group.manage_target = targets.join(",");
+
+    // (opsional) tetap simpan array di meta biar gampang filter/cek
+    group.meta = group.meta && typeof group.meta === "object" ? group.meta : {};
+    group.meta.manage_targets = targets;
+
+    await group.save();
+    return { ok: true, targets };
+}
+
 async function ensureModeInputData(group) {
     const mode = await WaGroupMode.findOne({ where: { key: "input_data", is_active: true } });
     if (!mode) return { ok: false, error: "Mode input_data belum ada di DB" };
@@ -231,6 +288,27 @@ async function unsetLeasing(group) {
     await WaGroupLeasingBranch.destroy({
         where: { group_id: group.id },
     });
+
+    await group.save();
+
+    return { ok: true };
+}
+
+async function unsetManageTarget(group) {
+    if (!group) return { ok: false, error: "Group tidak ditemukan" };
+
+    // pastikan meta object
+    group.meta = group.meta || {};
+    if (typeof group.meta !== "object") group.meta = {};
+
+    // hapus flexible fields
+    group.meta.manage_target = null;
+    group.meta.manage_targets = null;
+
+    // kalau field manage_target ada di kolom sendiri (bukan meta)
+    if ("manage_target" in group) {
+        group.manage_target = null;
+    }
 
     await group.save();
 
@@ -1133,6 +1211,17 @@ export async function handleIncoming({ instance, webhook }) {
             return;
         }
 
+        // ✅ MODE MANAGEMENT
+        if (raw === "management" || raw === "manage" || raw === "mgmt") {
+            const r = await ensureModeManagement(group);
+            if (!r.ok) {
+                await sendText({ ...ctx, message: `❌ ${r.error}` });
+                return;
+            }
+            await sendText({ ...ctx, message: "✅ Mode group diset: management" });
+            return;
+        }
+
         await sendText({
             ...ctx,
             message:
@@ -1141,8 +1230,67 @@ export async function handleIncoming({ instance, webhook }) {
                 "- set mode leasing\n" +
                 "- set mode input data\n" +
                 "- set mode pt\n" +
+                "- set mode management\n" +
                 "- set mode gateway",
         });
+        return;
+    }
+
+    if (key === "set_target") {
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
+
+        const modeKeyNow = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
+        if (modeKeyNow !== "management") {
+            await sendText({
+                ...ctx,
+                message: "❌ Command ini hanya untuk mode management.\nGunakan: set mode management",
+            });
+            return;
+        }
+
+        const rawTarget = []
+            .concat(args || [])
+            .concat(argsLines || [])
+            .filter(Boolean)
+            .join(" ")
+            .trim();
+
+        const r = await setManageTarget(group, rawTarget);
+        if (!r.ok) {
+            await sendText({ ...ctx, message: `❌ ${r.error}` });
+            return;
+        }
+
+        await sendText({
+            ...ctx,
+            message: `✅ Target management diset:\n- ${r.targets.join("\n- ")}`,
+        });
+        return;
+    }
+
+    if (key === "unset_target") {
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
+
+        const modeKeyNow = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
+        if (modeKeyNow !== "management") {
+            await sendText({
+                ...ctx,
+                message: "❌ Command ini hanya untuk mode management.\nGunakan: set mode management",
+            });
+            return;
+        }
+
+        const r = await unsetManageTarget(group);
+        if (!r.ok) {
+            await sendText({ ...ctx, message: `❌ ${r.error}` });
+            return;
+        }
+
+        await sendText({
+            ...ctx,
+            message: `✅ Target management berhasil dihapus.\nGroup ini tidak akan menerima notifikasi management.`,
+        });
+
         return;
     }
 
@@ -2003,7 +2151,6 @@ export async function handleIncoming({ instance, webhook }) {
     }
 
     if (key === "rekap_data") {
-        // leasing wajib dari group
         if (!group.leasing_id) {
             await sendText({ ...ctx, message: "❌ Leasing group belum diset. Jalankan: set leasing <kode>" });
             return;
@@ -2016,31 +2163,72 @@ export async function handleIncoming({ instance, webhook }) {
             return;
         }
 
-        const baseUrl = "https://api.digitalmanager.id";
+        // ===== cabangParam sama seperti tarik_report =====
+        let cabangParam = "";
+        const lvl = String(group.leasing_level || "").toUpperCase();
 
-        await sendText({ ...ctx, message: "⏳ Sedang tarik rekap data excel..." });
+        if (lvl === "CABANG" && group.leasing_branch_id) {
+            const b = await LeasingBranch.findByPk(group.leasing_branch_id, { attributes: ["name", "code"] });
+            cabangParam = String(b?.name || b?.code || "").trim().toUpperCase();
+        } else if (lvl === "AREA") {
+            const rows = await WaGroupLeasingBranch.findAll({
+                where: { group_id: group.id, is_active: true },
+                include: [{ model: LeasingBranch, as: "branch" }],
+                order: [["created_at", "ASC"]],
+            });
+            const names = rows
+                .map(r => r.branch?.name || r.branch?.code)
+                .filter(Boolean)
+                .map(s => String(s).trim().toUpperCase());
+
+            // bisa multi: "A,B,C"
+            cabangParam = names.join(",");
+        } else {
+            cabangParam = ""; // HO / unset
+        }
+
+        // hitung jumlah cabang (buat rule >20 => excel)
+        const cabangCount = cabangParam
+            ? cabangParam.split(",").map(s => s.trim()).filter(Boolean).length
+            : 0;
+
+        const baseUrl = "https://api.digitalmanager.id";
+        const PUBLIC_BASE = process.env.PUBLIC_BASE_URL;
+
+        await sendText({ ...ctx, message: "⏳ Sedang ambil rekap jumlah data..." });
 
         try {
-            const buf = await fetchRekapDataXlsx({
+            // rule: kalau cabang kosong atau >20 -> excel
+            const forceExcel = !cabangParam || cabangCount > 20;
+
+            const { kind, json, buffer } = await fetchRekapDataXlsx({
                 baseUrl,
                 leasing: leasingCode,
+                cabang: forceExcel ? "" : cabangParam,
+                source: "all",
             });
 
-            const filename = `rekap-data-${leasingCode}-${Date.now()}.xlsx`;
-            const meta = await saveTempXlsx(buf, filename);
+            if (!forceExcel && kind === "json") {
+                const msg = formatRekapJumlahDataText(json);
+                await sendText({ ...ctx, message: msg });
+                return;
+            }
 
-            const PUBLIC_BASE = process.env.PUBLIC_BASE_URL;
+            // excel flow (baik karena forceExcel atau API balas xlsx)
+            const filename = `rekap-data-${leasingCode}-${Date.now()}.xlsx`;
+            const meta = await saveTempXlsx(buffer || Buffer.from([]), filename);
             const link = `${PUBLIC_BASE}/api/temp-reports/dl/report/${meta.token}`;
 
             await sendText({
                 ...ctx,
                 message:
                     `✅ Rekap data siap.\n` +
-                    `Leasing: ${leasingCode}\n\n` +
+                    `Leasing: ${leasingCode}\n` +
+                    `Cabang: ${cabangParam || "NASIONAL"}\n` +
                     `⬇️ Download (berlaku 5 menit):\n${link}`,
             });
         } catch (e) {
-            await sendText({ ...ctx, message: `❌ Gagal tarik rekap.\n${e?.message || "Unknown error"}` });
+            await sendText({ ...ctx, message: `❌ Gagal ambil rekap.\n${e?.message || "Unknown error"}` });
         }
 
         return;

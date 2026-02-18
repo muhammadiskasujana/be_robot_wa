@@ -75,6 +75,21 @@ export function parseCommandV2(text, opts = {})  {
         return { key: "set_mode", args: [mode], argsLines: lines.slice(1) };
     }
 
+    // contoh:
+    // - "set target aktivasi"
+    // - "set target aktivasi,hapus_user"
+    // - "set target\naktivasi\nhapus_user"
+    if (first.startsWith("set target")) {
+        const afterRaw = first.replace("set target", "");
+        const after = cleanAfterCommand(afterRaw); // buang ":" "," "-" dst di awal
+
+        // gabung multiline juga (fleksibel)
+        const extra = lines.slice(1).join(" ").trim();
+        const combined = [after, extra].filter(Boolean).join(" ").trim();
+
+        return { key: "set_target", args: combined ? [combined] : [], argsLines: lines.slice(1) };
+    }
+
     // set leasing adira
     if (first.startsWith("set leasing ")) {
         const code = first.replace("set leasing ", "").trim();
@@ -85,6 +100,9 @@ export function parseCommandV2(text, opts = {})  {
     if (first === "unset leasing") {
         return { key: "unset_leasing", args: [], argsLines: lines.slice(1) };
     }
+
+    // ✅ unset management target
+    if (first === "unset target") return { key: "unset_target", args: [], argsLines: lines.slice(1) };
 
     // ✅ set pt <kode/nama>
     // contoh: "set pt PT MAJU MUNDUR" atau "set pt maju mundur"
