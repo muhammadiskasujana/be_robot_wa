@@ -1,25 +1,24 @@
 import express from "express";
 import fs from "fs";
-import { getTempMeta } from "../services/tempReportStore.js";
+import { getTempFileMeta } from "../services/tempReportStore.js";
 
 const router = express.Router();
 
-// GET /dl/report/:token
-router.get("/dl/report/:token", (req, res) => {
-    const token = String(req.params.token || "").trim();
-    if (!token) return res.status(400).send("Bad token");
+router.get("/dl/:token", (req, res) => {
+    const meta = getTempFileMeta(req.params.token);
+    if (!meta) return res.status(404).send("Token expired / not found");
 
-    const meta = getTempMeta(token);
-    if (!meta) return res.status(404).send("Link expired / not found");
+    const ct = meta.contentType || "application/octet-stream";
+    res.setHeader("Content-Type", ct);
 
+    const isInline = ct.startsWith("image/") || ct === "application/pdf";
     res.setHeader(
-        "Content-Type",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        "Content-Disposition",
+        `${isInline ? "inline" : "attachment"}; filename="${meta.filename}"`
     );
-    res.setHeader("Content-Disposition", `attachment; filename="${meta.filename}"`);
 
     const stream = fs.createReadStream(meta.filePath);
-    stream.on("error", () => res.status(500).send("Failed to read file"));
+    stream.on("error", () => res.status(500).send("Read error"));
     stream.pipe(res);
 });
 

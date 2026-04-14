@@ -24,6 +24,8 @@ import PtCompanyDef from "./PtCompany.js";
 import WaGroupSubscriptionDef from "./WaGroupSubscription.js";
 import defineWaDeleteHistory from "./WaDeleteHistory.js";
 
+import WaGroupFeatureDef from "./WaGroupFeature.js";
+import LinkedPTDef from "./LinkedPT.js";
 const { DataTypes } = Sequelize;
 
 // define
@@ -55,6 +57,11 @@ export const WaCreditTransaction = WaCreditTransactionDef(sequelize, DataTypes);
 export const PtCompany = PtCompanyDef(sequelize, DataTypes);
 export const WaGroupSubscription = WaGroupSubscriptionDef(sequelize, DataTypes);
 export const WaDeleteHistory = defineWaDeleteHistory(sequelize, DataTypes);
+
+export const WaGroupFeature = WaGroupFeatureDef(sequelize, DataTypes);
+export const LinkedPT = LinkedPTDef(sequelize, DataTypes);
+
+
 
 AdminUser.hasMany(AdminRefreshToken, { foreignKey: "user_id", as: "refreshTokens" });
 AdminRefreshToken.belongsTo(AdminUser, { foreignKey: "user_id", as: "user" });
@@ -123,5 +130,8 @@ WaGroupSubscription.belongsTo(LeasingCompany, { foreignKey: "leasing_id", as: "l
 
 PtCompany.hasMany(WaGroupSubscription, { foreignKey: "pt_company_id", as: "subscriptions" });
 WaGroupSubscription.belongsTo(PtCompany, { foreignKey: "pt_company_id", as: "pt_company" });
+
+WaGroup.hasMany(WaGroupFeature, { foreignKey: "group_id", as: "group_features" });
+WaGroupFeature.belongsTo(WaGroup, { foreignKey: "group_id", as: "group" });
 
 export { sequelize };

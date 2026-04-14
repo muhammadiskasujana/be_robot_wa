@@ -91,12 +91,12 @@ async function resolveTargetsForPayload(payload) {
 
     const targets = [];
 
-    // ------- MANAGEMENT mode (GENERIC events) -------
+    // ------- MANAGEMENT mode ONLY -------
     if (modeMgmt?.id && wantEventKey) {
         const groupsMgmt = await WaGroup.findAll({
             where: {
                 mode_id: modeMgmt.id,
-                notif_data_access_enabled: true, // ✅ sementara pakai flag yang sama (bisa dipisah nanti)
+                notif_data_access_enabled: true,
                 is_bot_enabled: true,
             },
             attributes: ["id", "chat_id", "mode_id", "manage_target", "leasing_id", "pt_company_id"],
@@ -106,9 +106,12 @@ async function resolveTargetsForPayload(payload) {
             if (!hasTarget(g.manage_target, wantEventKey)) continue;
             targets.push({ group: g, reason: `management:${wantEventKey}` });
         }
+
+        // penting: management event berhenti di sini
+        return targets;
     }
 
-    // ------- LEASING mode (existing) -------
+    // ------- LEASING mode -------
     if (modeLeasing?.id && leasingCode) {
         const leasing = await LeasingCompany.findOne({ where: { code: leasingCode, is_active: true } });
         if (leasing) {
@@ -153,7 +156,7 @@ async function resolveTargetsForPayload(payload) {
         }
     }
 
-    // ------- PT mode (existing) -------
+    // ------- PT mode -------
     if (modePt?.id && ptName) {
         const pt = await PtCompany.findOne({
             where: { is_active: true, [Op.or]: [{ code: ptName }, { name: ptName }] },
@@ -175,7 +178,6 @@ async function resolveTargetsForPayload(payload) {
         }
     }
 
-    // dedupe by group.id
     const seen = new Set();
     return targets.filter((t) => {
         if (seen.has(t.group.id)) return false;

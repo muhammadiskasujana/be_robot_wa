@@ -14,8 +14,16 @@ import * as Credit from "../controllers/admin/waCreditController.js";
 import * as Billing from "../controllers/admin/billing.controller.js";
 import * as Pt from "../controllers/admin/ptCompanyController.js";
 import * as Subs from "../controllers/admin/subscriptionController.js";
+import * as Fitur from "../controllers/admin/groupFeatureController.js"
+import * as LinkedPT from "../controllers/admin/linkedPT.controller.js"
+import * as DeleteHistory from "../controllers/admin/waDeleteHistory.controller.js"
 
 const router = Router();
+router.get("/delete-history", asyncWrap(DeleteHistory.list));
+router.get("/delete-history/:id", asyncWrap(DeleteHistory.getById));
+router.post("/delete-history", asyncWrap(DeleteHistory.createFromApi));
+router.put("/delete-history/:id/status", asyncWrap(DeleteHistory.updateStatus));
+
 router.use(requireAuth);
 
 // Instances
@@ -134,6 +142,22 @@ router.delete("/groups/:id/pt", asyncWrap(Pt.unsetGroupPt));
 router.get("/subscriptions", asyncWrap(Subs.list));
 router.post("/subscriptions", asyncWrap(Subs.createOrExtend));
 router.post("/subscriptions/:id/disable", asyncWrap(Subs.disable));
+
+/**
+ * ✅ GROUP FEATURES ROUTES
+ */
+router.get("/group-features", asyncWrap(Fitur.listFeatures));
+router.post("/group-features/:groupId/:featureKey", asyncWrap(Fitur.createOrUpdateFeature));
+router.put("/group-features/:groupId/:featureKey", asyncWrap(Fitur.updateFeature));
+router.post("/group-features/:groupId/enable", asyncWrap(Fitur.enableFeature));
+router.post("/group-features/:groupId/disable", asyncWrap(Fitur.disableFeature));
+router.delete("/group-features/:groupId/:featureKey", asyncWrap(Fitur.deleteFeature));
+
+router.get("/linked-pt", asyncWrap(LinkedPT.list));
+router.get("/linked-pt/:id", asyncWrap(LinkedPT.getById));
+router.post("/linked-pt", asyncWrap(LinkedPT.create));
+router.put("/linked-pt/:id", asyncWrap(LinkedPT.update));
+router.delete("/linked-pt/:id", asyncWrap(LinkedPT.remove));
 
 
 

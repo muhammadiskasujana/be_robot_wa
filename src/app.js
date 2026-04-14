@@ -9,6 +9,7 @@ import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
 import notifyRoutes from "./routes/notifyRoutes.js";
 import tempReportsRoutes from "./routes/tempReports.js";
+import tempLinksRoutes from "./routes/templinkRoutes.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -45,7 +46,8 @@ app.use("/webhook", webhookRoutes);
 app.use("/auth", authRoutes);
 app.use("/admin", adminRoutes);
 app.use("/api/notify", notifyRoutes);
-app.use("/api/temp-reports", tempReportsRoutes);
+app.use("/api/temp-files", tempReportsRoutes);
+app.use("/api/temp", tempLinksRoutes);
 
 app.use((err, req, res, next) => {
     console.error("❌ Error:", err?.message || err);

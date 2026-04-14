@@ -6,6 +6,7 @@ export const DELETE_REASONS = [
     "settle",
     "rollback",
     "back to current",
+    "lancar",
 ];
 
 export function getDeleteReasonByNumber(n) {

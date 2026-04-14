@@ -5,10 +5,6 @@ function up(s) {
 }
 
 function cleanIdValue(v = "") {
-    // untuk NOPOL / NOSIN / NOKA:
-    // - buang spasi
-    // - buang simbol aneh
-    // - sisakan huruf & angka saja
     return String(v || "")
         .toUpperCase()
         .replace(/\s+/g, "")
@@ -32,17 +28,9 @@ export function buildInputTemplate({ modeKey, type }) {
     ).trim();
 }
 
-/**
- * Parse pesan template yang sudah diisi.
- * Accept format:
- * INPUT DATA R2
- * NOPOL: DA1234XX
- * NOSIN: ...
- * ...
- */
 export function parseFilledTemplate(textRaw) {
     const text = String(textRaw || "").replace(/\r/g, "").trim();
-    const lines = text.split("\n").map(l => l.trim()).filter(Boolean);
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
     if (lines.length === 0) return null;
 
     const header = up(lines[0]);
@@ -60,9 +48,9 @@ export function parseFilledTemplate(textRaw) {
         const rawV = line.slice(idx + 1).trim();
         if (!rawV) continue;
 
-        if (k === "NOPOL") data.nopol = cleanIdValue(rawV);     // ✅
-        else if (k === "NOSIN") data.nosin = cleanIdValue(rawV); // ✅
-        else if (k === "NOKA") data.noka = cleanIdValue(rawV);   // ✅
+        if (k === "NOPOL") data.nopol = cleanIdValue(rawV);
+        else if (k === "NOSIN") data.nosin = cleanIdValue(rawV);
+        else if (k === "NOKA") data.noka = cleanIdValue(rawV);
         else if (k === "TIPE") data.tipe = up(rawV);
         else if (k === "LEASING") data.leasing = up(rawV);
         else if (k === "CABANG") data.cabang = up(rawV);
@@ -79,33 +67,53 @@ function toHp08(phone) {
     return p;
 }
 
-export async function sendToNewHunter({ phone, senderId, payload }) {
-    const baseURL = process.env.NEWHUNTER_API_BASE || "https://api-1.newhunter.id";
-    const token = process.env.NEWHUNTER_API_TOKEN;
+/**
+ * NEW: kirim ke DigitalManager titipan insert/update/exists
+ * Endpoint:
+ *  POST https://api.digitalmanager.id/api/titipan/insert/data?hp=08...&senderId=...@g.us
+ *
+ * payload: sama seperti sebelumnya
+ * response:
+ *  - ok true, action: insert|update|exists, message, kode_bulan, data, updatedFields?
+ *  - ok false, error: "nosin wajib"
+ */
+export async function sendToTitipanInsert({ phone, senderId, payload }) {
+    const baseURL = process.env.DIGITALMANAGER_API_BASE || "https://api.digitalmanager.id";
+    const url = `${baseURL}/api/titipan/insert/data`;
 
-    if (!token) throw new Error("NEWHUNTER_API_TOKEN belum diset di .env");
-
-    const url = `${baseURL}/v1/bot/sendData`;
     const params = {
-        hp: toHp08(phone),        // contoh: 6285xxxx (atau 085.. sesuai normalize kamu)
-        senderId: senderId, // chatId group
+        hp: toHp08(phone),
+        senderId,
     };
 
-    console.log("[SEND DATA]", {
+    console.log("[TITIPAN INSERT]", {
         url,
         params,
         payload,
-        authPrefix: String(token).slice(0, 12),
     });
 
     const res = await axios.post(url, payload, {
         params,
-        headers: {
-            "Content-Type": "application/json",
-            Authorization: token, // kalau token kamu butuh "Bearer xxx", isi env-nya pakai "Bearer ..."
-        },
+        headers: { "Content-Type": "application/json" },
         timeout: 60000,
+        validateStatus: () => true, // biar bisa handle ok:false tanpa throw axios
     });
 
-    return res.data;
+    // Normalisasi error
+    const data = res?.data;
+    if (!data || typeof data !== "object") {
+        const bodyText = typeof data === "string" ? data : "";
+        throw new Error(`Invalid response (${res.status}) ${bodyText}`.trim());
+    }
+
+    if (data.ok === false) {
+        // server sudah kasih error message yang jelas
+        const errMsg = data.error || data.message || "Gagal insert data";
+        const e = new Error(errMsg);
+        e.response = { status: res.status, data };
+        throw e;
+    }
+
+    // ok true
+    return data;
 }

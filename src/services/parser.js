@@ -190,12 +190,40 @@ export function parseCommandV2(text, opts = {})  {
         return { key: "history", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
+    if (first.startsWith("request lokasi")) {
+        const after = first.replace("request lokasi", "").trim();
+        return { key: "request_lokasi", args: after ? [after] : [], argsLines: lines.slice(1) };
+    }
+
+    // history AB1234CD
+    if (first.startsWith("delete")) {
+        const after = first.replace("delete", "").trim();
+        return { key: "delete_user", args: after ? [after] : [], argsLines: lines.slice(1) };
+    }
+
     // tarik report juli 2025
 // tarik report 11 juli 2025
 // tarik report hari ini
     if (first.startsWith("tarik report")) {
         const after = first.replace("tarik report", "").trim();
         return { key: "tarik_report", args: after ? [after] : [], argsLines: lines.slice(1) };
+    }
+
+
+
+    // =========================
+// ✅ VPN: CONNECT / STATUS
+// contoh:
+// "connect vpn"
+// "vpn up"
+// "vpn status"
+// =========================
+    if (first === "connect vpn" || first === "vpn up") {
+        return { key: "vpn_up", args: [], argsLines: lines.slice(1) };
+    }
+
+    if (first === "vpn status" || first === "status vpn") {
+        return { key: "vpn_status", args: [], argsLines: lines.slice(1) };
     }
 
     // rekap jumlah data
@@ -209,6 +237,136 @@ export function parseCommandV2(text, opts = {})  {
     ) {
         // belum perlu args (leasing diambil dari group setting)
         return { key: "rekap_data", args: [], argsLines: lines.slice(1) };
+    }
+
+    if (
+        first === "report pengguna"
+    ) {
+        // belum perlu args (leasing diambil dari group setting)
+        return { key: "report_pengguna", args: [], argsLines: lines.slice(1) };
+    }
+
+    // =========================
+    // ✅ SFTP: LIST FILE
+    // contoh:
+    // "list file front"
+    // =========================
+    if (first.startsWith("list file")) {
+        const afterRaw = first.replace("list file", "");
+        const after = cleanAfterCommand(afterRaw); // buang ":" "," "-" dst
+        // kalau user tulis multiline: "list file\nfront"
+        const extra = lines.slice(1).join(" ").trim();
+        const dir = (after || extra || "").trim();
+        return { key: "list_file", args: dir ? [dir] : [], argsLines: lines.slice(1) };
+    }
+
+    // =========================
+    // ✅ SFTP: GET FILE
+    // contoh:
+    // "get file front BAHAN....xlsx"
+    // "get file front\nBAHAN....xlsx"
+    // =========================
+    if (first.startsWith("get file")) {
+        const afterRaw = first.replace("get file", "");
+        const after = cleanAfterCommand(afterRaw);
+
+        // split sekali: dir + sisanya (filename bisa ada spasi)
+        let dir = "";
+        let file = "";
+
+        if (after) {
+            // ambil token pertama jadi dir
+            const parts = after.split(" ");
+            dir = (parts.shift() || "").trim();
+            file = parts.join(" ").trim();
+        }
+
+        // kalau filename kosong, coba ambil dari baris berikutnya
+        // contoh: "get file front" lalu baris 2: "BAHAN....xlsx"
+        if (!file) {
+            const extra = lines.slice(1).join(" ").trim();
+            if (extra) file = extra;
+        }
+
+        // kalau dir kosong (misal user "get file\nfront\nfile.xlsx")
+        if (!dir) {
+            const extraLines = lines.slice(1);
+            dir = (extraLines[0] || "").trim();
+            file = (extraLines.slice(1).join(" ").trim()) || file;
+        }
+
+        const args = [];
+        if (dir) args.push(dir);
+        if (file) args.push(file);
+
+        return { key: "get_file", args, argsLines: lines.slice(1) };
+    }
+
+    // =========================
+    // ✅ get statistik ...
+    // contoh:
+    // - "get statistik"
+    // - "get statistik 2026"
+    // - "get statistik februari 2026"
+    // - "get statistik 2 februari 2026"
+    // - "get statistik hari ini"
+    // - "get statistik minggu ini"
+    // - "get statistik 2 februari 2026 to 6 februari 2026"
+    // - "get statistik cabang banjarmasin hari ini"
+    // =========================
+    if (first.startsWith("get statistik")) {
+        const afterRaw = first.replace("get statistik", "");
+        const after = cleanAfterCommand(afterRaw);
+        // gabung multiline
+        const extra = lines.slice(1).join(" ").trim();
+        const combined = [after, extra].filter(Boolean).join(" ").trim();
+        return { key: "get_statistik", args: combined ? [combined] : [], argsLines: lines.slice(1) };
+    }
+
+    // =========================
+// ✅ REGISTER WEB LEASING (BUAT AKUN)
+// =========================
+
+// 1) trigger: "buat akun"
+    if (first === "buat akun" || first === "daftar akun" || first === "register akun") {
+        return { key: "buat_akun", args: [], argsLines: lines.slice(1) };
+    }
+
+// helper kecil: cek format "INPUT DATA LOGIN"
+    function isLoginTemplateHeader(line0 = "") {
+        const h = String(line0 || "").trim().toUpperCase();
+        return h === "INPUT DATA LOGIN" || h.startsWith("INPUT DATA LOGIN");
+    }
+
+// 2) submit template: "INPUT DATA LOGIN\nNama: ...\nJabatan: ...\nKelola_Bahan: ..."
+    if (isLoginTemplateHeader(lines[0] || "")) {
+        // whole message dianggap payload template
+        // handler akan parse detailnya via parseRegisterTemplate(text)
+        return { key: "register_submit", args: [], argsLines: lines.slice(1), meta: { raw: cleaned } };
+    }
+
+// 3) pilih cabang (step 2) -> hanya angka / angka koma
+// contoh: "1" atau "1,3,7"
+    if (/^\d+(?:\s*,\s*\d+)*$/.test(first)) {
+        // ini generic, handler yang cek apakah ada pending register untuk user ini
+        return { key: "register_pick_branch", args: [first], argsLines: lines.slice(1) };
+    }
+
+    // =========================
+// ✅ PT: LIST ANGGOTA
+// =========================
+    if (first === "list anggota") {
+        return { key: "pt_list_members", args: ["all"], argsLines: lines.slice(1) };
+    }
+    if (first === "list anggota aktif" || first === "list anggota active") {
+        return { key: "pt_list_members", args: ["active"], argsLines: lines.slice(1) };
+    }
+    if (
+        first === "list anggota nonaktif" ||
+        first === "list anggota non active" ||
+        first === "list anggota inactive"
+    ) {
+        return { key: "pt_list_members", args: ["inactive"], argsLines: lines.slice(1) };
     }
 
     // request lokasi 08123...

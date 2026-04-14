@@ -51,8 +51,9 @@ export async function getAccessHistoryByParam(param) {
 
             return {
                 ok: Boolean(data?.ok),
+                mode: data?.mode || "",              // << tambah
                 input,
-                nopol: resolvedNopol || "",     // penting: hasil resolved
+                nopol: resolvedNopol || "",
                 resolvedNopol: resolvedNopol || "",
                 resolvedFrom: data?.resolvedFrom || "",
                 count: Number(data?.count ?? items.length ?? 0),

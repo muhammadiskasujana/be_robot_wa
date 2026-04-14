@@ -2,6 +2,7 @@ import {
     WaPrivateWhitelist,
     WaMaster,
     WaGroup,
+    WaGroupFeature,
     WaGroupMode,
     LeasingCompany,
     LeasingBranch,
@@ -9,14 +10,26 @@ import {
     PtCompany,
     WaDeleteHistory,
 } from "../models/index.js";
-
+import crypto from "crypto";
 import { sendText } from "./greenapi.js";
 import { fetchAccessReportXlsx } from "./tarikreport/reportsAccess.js";
 import { fetchRekapDataXlsx } from "./rekapJumlahData/fetchRekapDataXlsx.js";
-import { saveTempXlsx } from "./tempReportStore.js"; // sesuaikan path
+import {listSftpFiles, downloadSftpFileXlsx, vpnStatus, vpnUp} from "./sftp/sftpFiles.js";
+import { fetchAccessStatPng } from "./statistik/statistikService.js";
+import { parseStatistikArgs } from "./statistik/statistikParser.js";
+import { fetchPtMembers, formatPtMembersMessage, buildPtMembersMessages } from "./ptMembers/ptMembersService.js";
+import { saveTempFile } from "./tempReportStore.js"; // sesuaikan path
 import {normalizePhone, extractText, isGroupChat, parseCommandV2, normalizeText} from "./parser.js";
+import { createPendingStore, makeQuotedKey, startPendingCleaner } from "./pending/pendingJsonStore.js";
 
-import { buildInputTemplate, parseFilledTemplate, sendToNewHunter } from "./inputData/inputData.js";
+import {
+    buildRegisterTemplate,
+    parseRegisterTemplate,
+    fetchCabangList,
+    registerLeasingUser,
+} from "./registerWebLeasing/leasingRegister.js";
+
+import {buildInputTemplate, parseFilledTemplate, sendToTitipanInsert} from "./inputData/inputData.js";
 import { bulkDeleteNopol } from "./deleteNopol/deleteNopol.js"; // atau file helper baru
 import { checkAndDebit } from "./billingService.js";
 // robot.js (tambahkan import di atas)
@@ -28,11 +41,90 @@ import { isSenderAdminGroup } from "./greenapiGroups.js";
 
 import {fetchJson,  fetchBool, fetchString, TTL, CacheKeys, CacheInvalidate } from "./cacheService.js";
 import { getDeleteReasonByNumber, DELETE_REASONS } from "./deleteNopol/deleteReasons.js";
-import { parseNopolFromText,parseLeasingCodeFromText,getQuotedText  } from "./deleteNopol/parserDelete.js";
+import { parseNopolFromText,parseLeasingCodeFromText,getQuotedText, getQuotedMessageId  } from "./deleteNopol/parserDelete.js";
 import Sequelize from "sequelize";
 import {formatRekapJumlahDataText} from "./rekapJumlahData/rekapFormatter.js";
+import {resolveCabangParamFromGroup} from "./helper/resolveCabangGroup.js";
+import {createTempLink} from "./tempLink/tempLinkService.js";
+import {deleteLeasingUser} from "./registerWebLeasing/deleteLeasingUser.js";
+import {formatRequestLokasiMessage, parseRequestLokasiInput, requestLokasiTerbaru} from "./lokasi/requestLokasi.js";
+import {fetchUsersReportXlsx} from "./tarikreport/fetchUsersReportXlsx.js";
+import {guardFeature} from "./middleware/cekFitur.js";
 const { Op } = Sequelize;
 
+
+
+
+const pendingRegStore = createPendingStore("pending_register.json", 5 * 60 * 1000);
+const pendingDelStore = createPendingStore("pending_delete.json", 5 * 60 * 1000);
+
+// optional cleaner (1 menit sekali)
+startPendingCleaner([pendingRegStore, pendingDelStore], 60 * 1000);
+
+// Pending state sederhana (bisa pindah ke Redis kalau mau tahan restart)
+const pendingRegister = new Map();
+/**
+ * key: `${chatId}:${sender}`
+ * val: {
+ *   step: "choose_cabang",
+ *   leasingCode,
+ *   form: { nama, role, handling, jabatan },
+ *   cabangList: string[],
+ *   createdAt: number
+ * }
+ */
+
+
+function normCabang(v) {
+    return String(v || "").trim().toUpperCase();
+}
+
+function uniq(arr) {
+    const out = [];
+    const seen = new Set();
+    for (const x of arr || []) {
+        const v = normCabang(x);
+        if (!v) continue;
+        if (seen.has(v)) continue;
+        seen.add(v);
+        out.push(v);
+    }
+    return out;
+}
+
+function quotedIdFromText(quotedText) {
+    const q = String(quotedText || "").trim();
+    if (!q) return "";
+    return crypto.createHash("sha1").update(q).digest("hex");
+}
+
+function makePendingKey({ chatId, sender }) {
+    return `${chatId}:${sender}`;
+}
+
+function parseCabangSelection(textRaw) {
+    // terima: "1" atau "1,2,5"
+    const s = String(textRaw || "").trim();
+    if (!s) return [];
+    return s
+        .split(",")
+        .map(x => x.trim())
+        .filter(Boolean)
+        .map(x => Number(x))
+        .filter(n => Number.isFinite(n) && n > 0);
+}
+
+function formatCabangMenu(cabangList) {
+    // batasi panjang WA kalau cabang banyak
+    const maxShow = 100;
+    const show = cabangList.slice(0, maxShow);
+
+    const lines = show.map((c, i) => `${i + 1}. ${c}`);
+    if (cabangList.length > maxShow) {
+        lines.push(`...dan ${cabangList.length - maxShow} cabang lainnya`);
+    }
+    return lines.join("\n");
+}
 
 async function isMasterPhoneCached(phone) {
     if (!phone) return false;
@@ -548,40 +640,108 @@ async function listBranchesForGroup(group) {
     return { ok: true, leasing, level: level === "-" ? "-" : level, branches };
 }
 
+async function createDeleteHistory({
+                                       WaDeleteHistory,
+                                       chatId,
+                                       nopol,
+                                       sender,
+                                       leasingCode,
+                                       modeKey,
+                                       source,
+                                       meta = {},
+                                   }) {
+    return await WaDeleteHistory.create({
+        chat_id: String(chatId).trim(),
+        nopol: String(nopol).trim().toUpperCase(),
+        sender: String(sender || "").trim(),
+        leasing_code: String(leasingCode || "").trim().toUpperCase(),
+        delete_reason: null,
+        status: "PENDING",
+        requested_at: new Date(),
+        meta: {
+            modeKey,
+            source,
+            ...meta,
+        },
+    });
+}
+
+async function updateDeleteHistoryById({
+                                           WaDeleteHistory,
+                                           historyId,
+                                           status,
+                                           deleteReason,
+                                           metaPatch = {},
+                                           confirmedAt = null,
+                                       }) {
+    if (!historyId) return null;
+
+    const row = await WaDeleteHistory.findByPk(historyId);
+    if (!row) return null;
+
+    const nextMeta = {
+        ...(row.meta || {}),
+        ...metaPatch,
+    };
+
+    row.status = status || row.status;
+
+    if (deleteReason !== undefined) {
+        row.delete_reason = deleteReason;
+    }
+
+    if (confirmedAt !== undefined) {
+        row.confirmed_at = confirmedAt;
+    }
+
+    row.meta = nextMeta;
+
+    await row.save();
+    return row;
+}
+
+// tryConfirmQuotedDeleteReason.js
 export async function tryConfirmQuotedDeleteReason({
                                                        webhook,
                                                        ctx,
                                                        group,
                                                        phone,
+                                                       chatId,
                                                        sendText,
                                                        bulkDeleteNopol,
-                                                       WaDeleteHistory,
                                                        runPaidCommand,
                                                        getModeKeyCached,
+                                                       pendingDelStore,
+                                                       WaDeleteHistory,
                                                    }) {
     const body = extractText(webhook);
     const t = normalizeText(body);
 
-    // hanya angka 1-7
     if (!/^[1-7]$/.test(t)) return false;
 
-    const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000);
+    // wajib reply/quote menu
+    const quotedText = getQuotedText(webhook);
+    if (!quotedText) return false;
 
-    const pending = await WaDeleteHistory.findOne({
-        where: {
-            chat_id: group.chat_id,
-            sender: phone,
-            status: "PENDING",
-            requested_at: { [Op.gte]: fiveMinAgo },
-        },
-        order: [["requested_at", "DESC"]],
-    });
+    const sender = webhook?.senderData?.sender || "";
+    const pKey = makePendingKey({ chatId, sender });
 
-    if (!pending) {
-        // kalau user balas angka tapi pending tidak ada / expired
-        await sendText({ ...ctx, message: "Permintaan sudah kadaluarsa, ulangi hapus nopol." });
-        return true; // ✅ dianggap handled supaya tidak lanjut ke command lain
-    }
+    const pending = await pendingDelStore.get(pKey);
+    if (!pending || pending.step !== "choose_reason") return false;
+
+    const historyId = pending?.historyId || null;
+
+    // pastikan quote memang menu hapus
+    const qt = String(quotedText || "").toUpperCase();
+    const mustNopol = String(pending.nopol || "").toUpperCase();
+    const mustLeasing = String(pending.leasingCode || "").toUpperCase();
+
+    const looksLikeMenu =
+        qt.includes("ANDA AKAN MENGHAPUS NOPOL") &&
+        (!mustNopol || qt.includes(mustNopol)) &&
+        (!mustLeasing || qt.includes(mustLeasing));
+
+    if (!looksLikeMenu) return false;
 
     const reason = getDeleteReasonByNumber(t);
     if (!reason) return false;
@@ -589,72 +749,195 @@ export async function tryConfirmQuotedDeleteReason({
     const modeKey = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
     const personalOnly = modeKey === "input_data";
 
-    await runPaidCommand({
-        commandKey: "delete_nopol",
-        group,
-        webhook,
-        ctx,
-
-        phone_e164: phone,
-        wallet_scope_override: personalOnly ? "PERSONAL" : null,
-
-        precheck_before_execute: personalOnly,
-        precheck_units: 1,
-
-        sendBalanceToPersonal: personalOnly,
-        hideBalanceInGroup: personalOnly,
-        groupSuccessSuffix: personalOnly ? "ℹ️ Sisa kredit kamu dikirim ke chat pribadi." : null,
-        personalChatId: personalOnly ? (webhook?.senderData?.sender || null) : null,
-
-        args: {
-            leasingCode: pending.leasing_code,
-            nopol: pending.nopol,
-            reason,
-            deleteHistoryId: pending.id,
-        },
-
-        replyBuilder: async ({ leasingCode, nopol, reason, deleteHistoryId }) => {
-            try {
-                // ✅ API selalu sukses kalau tidak throw
-                await bulkDeleteNopol({ leasingCode, nopolList: [nopol] });
-
-                await WaDeleteHistory.update(
-                    {
-                        delete_reason: reason,
-                        status: "DONE",
-                        confirmed_at: new Date(),
-                    },
-                    { where: { id: deleteHistoryId } }
-                );
-
-                return {
-                    text: "Data berhasil dihapus",
-                    chargeable: true,
-                    chargeUnits: 1,
-                };
-            } catch (e) {
-                await WaDeleteHistory.update(
-                    {
-                        delete_reason: reason,
-                        status: "FAILED",
-                        confirmed_at: new Date(),
-                        meta: { error: e?.response?.data || e?.message || "ERROR" },
-                    },
-                    { where: { id: deleteHistoryId } }
-                );
-
-                return {
-                    text: `❌ Gagal hapus nopol.\n${e?.response?.data?.error || e.message}`,
-                    chargeable: false,
-                    chargeUnits: 1,
-                };
-            }
+    // simpan alasan dulu, status tetap PENDING
+    await updateDeleteHistoryById({
+        WaDeleteHistory,
+        historyId,
+        deleteReason: reason,
+        metaPatch: {
+            reason_selected_at: new Date().toISOString(),
+            confirmed_via: "quoted_reason_reply",
         },
     });
 
-    return true;
+    let shouldDeletePending = false;
+
+    try {
+        await runPaidCommand({
+            commandKey: "delete_nopol",
+            group,
+            webhook,
+            ctx,
+            phone_e164: phone,
+            wallet_scope_override: personalOnly ? "PERSONAL" : null,
+            precheck_before_execute: personalOnly,
+            precheck_units: 1,
+            sendBalanceToPersonal: personalOnly,
+            hideBalanceInGroup: personalOnly,
+            groupSuccessSuffix: personalOnly ? "ℹ️ Sisa kredit kamu dikirim ke chat pribadi." : null,
+            personalChatId: personalOnly ? (webhook?.senderData?.sender || null) : null,
+            args: {
+                leasingCode: pending.leasingCode,
+                nopolList: [pending.nopol],
+                reason,
+            },
+
+            replyBuilder: async ({ leasingCode, nopolList, reason }) => {
+                try {
+                    const apiRes = await bulkDeleteNopol({
+                        leasingCode,
+                        nopolList,
+                        reason, // kirim juga kalau upstream support
+                    });
+
+                    const success = Array.isArray(apiRes?.success) ? apiRes.success : [];
+                    const notFound = Array.isArray(apiRes?.notFound) ? apiRes.notFound : [];
+                    const successCount = Number(apiRes?.successCount ?? success.length ?? 0);
+                    const notFoundCount = Number(apiRes?.notFoundCount ?? notFound.length ?? 0);
+
+                    await updateDeleteHistoryById({
+                        WaDeleteHistory,
+                        historyId,
+                        status: successCount > 0 ? "DONE" : "FAILED",
+                        deleteReason: reason,
+                        confirmedAt: new Date(),
+                        metaPatch: {
+                            api_result: {
+                                leasing: apiRes?.leasing || leasingCode,
+                                requested: 1,
+                                success,
+                                notFound,
+                                successCount,
+                                notFoundCount,
+                            },
+                            finished_at: new Date().toISOString(),
+                        },
+                    });
+
+                    if (successCount > 0 || notFoundCount > 0) {
+                        shouldDeletePending = true;
+                    }
+
+                    const lines = [];
+                    lines.push(`*HAPUS NOPOL (TITIPAN)*`);
+                    lines.push(`Leasing: *${String(apiRes?.leasing || leasingCode).toUpperCase()}*`);
+                    lines.push(`Alasan: *${reason}*`);
+
+                    if (successCount > 0) {
+                        lines.push(`✅ Berhasil dihapus (*${successCount}*):`);
+                        lines.push(success.map((x) => `• ${String(x).toUpperCase()}`).join("\n"));
+                    }
+
+                    if (notFoundCount > 0) {
+                        lines.push(`➖ Tidak ditemukan (*${notFoundCount}*):`);
+                        lines.push(notFound.map((x) => `• ${String(x).toUpperCase()}`).join("\n"));
+                    }
+
+                    if (successCount === 0 && notFoundCount > 0) {
+                        lines.push(`➖ Tidak ada nopol yang dihapus karena tidak ditemukan.`);
+                    }
+
+                    return {
+                        text: lines.join("\n").trim(),
+                        chargeable: successCount > 0,
+                        chargeUnits: successCount,
+                    };
+                } catch (e) {
+                    const d = e?.response?.data;
+
+                    await updateDeleteHistoryById({
+                        WaDeleteHistory,
+                        historyId,
+                        status: "FAILED",
+                        deleteReason: reason,
+                        confirmedAt: new Date(),
+                        metaPatch: {
+                            error: {
+                                message: e?.message || "Unknown error",
+                                response: d || null,
+                            },
+                            finished_at: new Date().toISOString(),
+                        },
+                    });
+
+                    shouldDeletePending = true;
+
+                    if (d?.ok === false && /leasing/i.test(String(d?.message || ""))) {
+                        const mismatch = Array.isArray(d?.mismatch) ? d.mismatch : [];
+                        const details = mismatch.length
+                            ? "\n" + mismatch.map((x) =>
+                            `• ${String(x.nopol || "").toUpperCase()} (actual: ${String(x.actualLeasing || "-").toUpperCase()})`
+                        ).join("\n")
+                            : "";
+
+                        return {
+                            text:
+                                `❌ Gagal hapus nopol (leasing tidak sesuai).\n` +
+                                `Param leasing: *${String(d?.leasingParam || leasingCode).toUpperCase()}*\n` +
+                                `Mismatch: *${d?.mismatchCount ?? mismatch.length}*` +
+                                details,
+                            chargeable: false,
+                            chargeUnits: 0,
+                        };
+                    }
+
+                    const msg =
+                        (typeof d === "string" ? d : (d?.error || d?.message)) ||
+                        e?.message ||
+                        "Unknown error";
+
+                    return {
+                        text: `❌ Gagal hapus nopol.\n${msg}`,
+                        chargeable: false,
+                        chargeUnits: 0,
+                    };
+                }
+            },
+        });
+
+        if (shouldDeletePending) {
+            await pendingDelStore.del(pKey);
+        }
+
+        return true;
+    } catch (e) {
+        await updateDeleteHistoryById({
+            WaDeleteHistory,
+            historyId,
+            status: "FAILED",
+            deleteReason: reason,
+            confirmedAt: new Date(),
+            metaPatch: {
+                run_paid_command_error: e?.message || "Unknown error",
+                finished_at: new Date().toISOString(),
+            },
+        });
+
+        await pendingDelStore.del(pKey);
+        throw e;
+    }
 }
 
+
+function formatBytes(n) {
+    const num = Number(n || 0);
+    if (!Number.isFinite(num)) return "-";
+    if (num < 1024) return `${num} B`;
+    const kb = num / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+    const mb = kb / 1024;
+    if (mb < 1024) return `${mb.toFixed(1)} MB`;
+    const gb = mb / 1024;
+    return `${gb.toFixed(1)} GB`;
+}
+
+function formatTime(ms) {
+    const t = Number(ms);
+    if (!Number.isFinite(t) || t <= 0) return "-";
+    // simple: ISO lokal bisa, atau WIB. (pakai moment kalau sudah ada)
+    const d = new Date(t);
+    return d.toLocaleString("id-ID");
+}
 
 function parseNopolList(firstArg = "", lines = []) {
     let tokens = [];
@@ -934,17 +1217,27 @@ export async function handleIncoming({ instance, webhook }) {
     // ===== GROUP =====
     const group = await getOrCreateGroup(chatId, chatName);
     const modeKey = String(await getModeKeyCached(group.mode_id) || "").toLowerCase();
-    const { key, args, argsLines, meta } = parseCommandV2(text, { modeKey });
+
 
 
     const handled = await tryConfirmQuotedDeleteReason({
-        webhook, ctx, group, phone,
-        sendText, bulkDeleteNopol,
-        WaDeleteHistory, runPaidCommand,
+        webhook,
+        ctx,
+        group,
+        phone,
+        chatId,              // ✅ INI YANG KURANG
+
+        sendText,
+        bulkDeleteNopol,
+        runPaidCommand,
         getModeKeyCached,
+        pendingDelStore,
+        WaDeleteHistory
     });
 
     if (handled) return;
+
+    const { key, args, argsLines, meta } = parseCommandV2(text, { modeKey });
 
     // jika bot mati, stop (kecuali help/aktifkan robot dsb yang sudah kamu handle)
     if (!group.is_bot_enabled) {
@@ -955,6 +1248,12 @@ export async function handleIncoming({ instance, webhook }) {
     // ✅ DETEKSI TEMPLATE SUBMISSION (tanpa perlu command)
     const filled = parseFilledTemplate(text);
     if (filled && (filled.type === "R2" || filled.type === "R4")) {
+
+        // ✅ GUARD: cek apakah fitur input_data diaktifkan
+        const featureKey = filled.type === "R4" ? "input_data_r4" : "input_data_r2";
+        if (!(await guardFeature({ groupId: group.id, featureKey, ctx, sendText }))) {
+            return;
+        }
 
         const { data } = filled;
 
@@ -1022,45 +1321,332 @@ export async function handleIncoming({ instance, webhook }) {
             args: { payload },
             replyBuilder: async ({ payload }) => {
                 try {
-                    const apiRes = await sendToNewHunter({
+                    const apiRes = await sendToTitipanInsert({
                         phone,
                         senderId: chatId,
                         payload,
                     });
 
-                    return {
-                        text: `✅ Data berhasil dikirim.\nRef: ${apiRes?.id || apiRes?.ref || "-"}`,
-                        chargeable: true, // ✅ hanya ini yang potong kredit
-                    };
-                } catch (e) {
-                    const status = e?.response?.status;
-                    const resp = e?.response?.data;
-                    const msg =
-                        typeof resp === "string"
-                            ? resp
-                            : (resp?.error || resp?.message || "");
+                    // action: insert | update | exists
+                    const action = String(apiRes?.action || "").toLowerCase();
 
-                    // ❌ nopol sudah ada -> jangan charge
-                    if (status === 400 && /nopol\s*sudah\s*ada/i.test(msg)) {
+                    if (action === "exists") {
+                        // "Data sudah ada" -> tidak charge (samakan dengan rule lama "nopol sudah ada")
                         return {
                             text: `ℹ️ Data sudah ada di sistem (NOPOL: ${payload.nopol}).`,
                             chargeable: false,
                         };
                     }
 
-                    // ❌ selain itu gagal -> jangan charge
-                    console.error("SEND DATA ERROR", { status, data: resp, message: e?.message });
+                    // insert / update -> charge
+                    const ref = apiRes?.data?.uuid || apiRes?.data?.nopol || "-";
+                    const msg = apiRes?.message || "Berhasil";
+
+                    // kalau update, tampilkan field yang berubah (opsional, ringkas)
+                    const upd = Array.isArray(apiRes?.updatedFields) && apiRes.updatedFields.length
+                        ? `\nUpdated: ${apiRes.updatedFields.join(", ")}`
+                        : "";
 
                     return {
-                        text: `❌ Gagal kirim data ke server.\n${msg || e.message}`,
+                        text: `✅ ${msg}\nRef: ${ref}${upd}`,
+                        chargeable: true,
+                    };
+                } catch (e) {
+                    const resp = e?.response?.data;
+                    const msg =
+                        (resp && (resp.error || resp.message)) ||
+                        e?.message ||
+                        "Gagal kirim data";
+
+                    return {
+                        text: `❌ Gagal kirim data ke server.\n${msg}`,
                         chargeable: false,
                     };
                 }
-            },
+            }
         });
 
         return;
     }
+
+    // ====== REGISTRATION FLOW (WAJIB QUOTE) ======
+    // ====== REGISTRATION FLOW ======
+    const sender = webhook?.senderData?.sender || "";
+    if (!sender) {
+        await sendText({ ...ctx, message: "❌ Sender tidak valid." });
+        return;
+    }
+
+    const pkey = makePendingKey({ chatId, sender });
+
+// 1) Kalau user sedang pending pilih cabang -> WAJIB QUOTE menu cabang
+    const pendingReg = await pendingRegStore.get(pkey);
+
+    if (pendingReg?.step === "choose_cabang") {
+        const quotedMsgId = getQuotedMessageId(webhook); // ✅ wajib ada di step ini
+
+        if (!quotedMsgId) {
+            // ✅ wajib quote, tapi kalau tidak quote -> DIAMKAN (tanpa respon)
+            return;
+        }
+
+        const picks = parseCabangSelection(text);
+        if (!picks.length) {
+            await sendText({ ...ctx, message: "❌ Pilih cabang pakai nomor. Contoh: 1 atau 1,2,3" });
+            return;
+        }
+
+        // validasi range
+        const outOfRange = picks.filter((n) => n < 1 || n > pendingReg.cabangList.length);
+        if (outOfRange.length) {
+            await sendText({ ...ctx, message: `❌ Nomor cabang tidak valid: ${outOfRange.join(", ")}` });
+            return;
+        }
+
+        const unique = Array.from(new Set(picks));
+
+        if (pendingReg.form.jabatan === 3 && unique.length !== 1) {
+            await sendText({ ...ctx, message: "❌ Jabatan 3 hanya boleh memilih 1 cabang." });
+            return;
+        }
+        if (pendingReg.form.jabatan === 2 && unique.length < 1) {
+            await sendText({ ...ctx, message: "❌ Minimal pilih 1 cabang." });
+            return;
+        }
+
+        const chosenCabang = unique.map((n) => pendingReg.cabangList[n - 1]);
+
+        const leasingCode = pendingReg.leasingCode;
+
+        const reg = await registerLeasingUser({
+            nama: pendingReg.form.nama,
+            phone,
+            leasing: leasingCode,
+            cabang: chosenCabang,
+            handling: pendingReg.form.handling,
+            role: pendingReg.form.role,
+        });
+
+        if (!reg.ok) {
+            // ✅ apapun gagal -> hapus pending biar gak ganggu
+            await pendingRegStore.del(pkey);
+
+            await sendText({
+                ...ctx,
+                message: `❌ Gagal daftar.\n${reg.error}\n(${reg.status || "-"})`,
+            });
+            return;
+        }
+
+        // ✅ hapus pending (file store)
+        await pendingRegStore.del(pkey);
+
+        await sendText({
+            ...ctx,
+            message:
+                "✅ Berhasil membuat akun.\n" +
+                `Nama: ${pendingReg.form.nama}\n` +
+                `Leasing: ${leasingCode}\n` +
+                `Cabang: ${chosenCabang.join(", ")}\n` +
+                `Handling: ${pendingReg.form.handling} | Role: ${pendingReg.form.role}`,
+        });
+
+        return;
+    }
+
+// 2) Submit template (TIDAK PERLU QUOTE)
+    const parsed = parseRegisterTemplate(text);
+    if (parsed?.ok) {
+        // leasing diambil dari setting group
+        // leasing diambil dari group (tetap sama)
+        if (!group?.leasing_id) {
+            await sendText({ ...ctx, message: "❌ Group ini belum diset leasing. Jalankan: set leasing <kode>" });
+            return;
+        }
+
+        const leasing = await LeasingCompany.findByPk(group.leasing_id);
+        const leasingCode = leasing?.code ? String(leasing.code).toUpperCase() : "";
+        if (!leasingCode) {
+            await sendText({ ...ctx, message: "❌ Leasing group tidak valid." });
+            return;
+        }
+
+// 1) Ambil semua cabang dari API (sebagai fallback / validasi)
+        let allCabang = [];
+        try {
+            const lc = await fetchCabangList({ leasingCode });
+            allCabang = uniq(lc.cabang || []);
+        } catch (e) {
+            await sendText({ ...ctx, message: `❌ Gagal ambil list cabang.\n${e.message}` });
+            return;
+        }
+
+        if (!allCabang.length) {
+            await sendText({ ...ctx, message: "❌ List cabang dari API kosong untuk leasing ini." });
+            return;
+        }
+
+// 2) Ambil cabang milik group
+        let cabangList = [];
+        try {
+            const gb = await listBranchesForGroup(group);
+
+            if (!gb.ok) {
+                await sendText({ ...ctx, message: `❌ ${gb.error || "Gagal ambil cabang group"}` });
+                return;
+            }
+
+            // HO => ALL (pakai full API)
+            if (gb.branches === "ALL") {
+                cabangList = allCabang;
+            } else {
+                const groupBranches = uniq(gb.branches || []);
+
+                // jika group tidak punya list -> fallback full API
+                if (!groupBranches.length) {
+                    cabangList = allCabang;
+                } else {
+                    // // ✅ tampilkan cabang sesuai group
+                    // // opsional: filter supaya cuma yang valid di API (hindari typo)
+                    // const allSet = new Set(allCabang.map(normCabang));
+                    // const filtered = groupBranches.filter((c) => allSet.has(normCabang(c)));
+                    //
+                    // cabangList = filtered.length ? filtered : groupBranches;
+                    const apiNormMap = new Map();
+                    for (const c of allCabang) {
+                        const key = normCabang(c);
+                        if (!apiNormMap.has(key)) apiNormMap.set(key, c);
+                    }
+
+                    const groupNormMap = new Map();
+                    for (const c of groupBranches) {
+                        const key = normCabang(c);
+                        if (!groupNormMap.has(key)) groupNormMap.set(key, c);
+                    }
+
+// match mengikuti urutan API
+                    const matchedInApiOrder = [];
+                    for (const apiCabang of allCabang) {
+                        const key = normCabang(apiCabang);
+                        if (groupNormMap.has(key)) {
+                            matchedInApiOrder.push(apiCabang);
+                        }
+                    }
+
+// yang tidak ada di API, tetap tampil di belakang
+                    const unmatchedFromGroup = [];
+                    for (const groupCabang of groupBranches) {
+                        const key = normCabang(groupCabang);
+                        if (!apiNormMap.has(key)) {
+                            unmatchedFromGroup.push(groupCabang);
+                        }
+                    }
+
+                    cabangList = uniq([...matchedInApiOrder, ...unmatchedFromGroup]);
+                }
+            }
+        } catch (e) {
+            // jika error baca group branch, fallback full API biar tetap jalan
+            cabangList = allCabang;
+        }
+
+        if (!cabangList.length) {
+            await sendText({ ...ctx, message: "❌ List cabang kosong untuk leasing ini." });
+            return;
+        }
+
+        const form = parsed.data;
+
+        // jabatan 1 = nasional → langsung semua cabang (tidak perlu quote)
+        if (form.jabatan === 1) {
+            const reg = await registerLeasingUser({
+                nama: form.nama,
+                phone,
+                leasing: leasingCode,
+                cabang: cabangList,
+                handling: form.handling,
+                role: form.role,
+            });
+
+            if (!reg.ok) {
+                await sendText({ ...ctx, message: `❌ Gagal daftar.\n${reg.error}\n(${reg.status || "-"})` });
+                return;
+            }
+
+            await sendText({
+                ...ctx,
+                message:
+                    "✅ Berhasil membuat akun (Handle Nasional).\n" +
+                    `Nama: ${form.nama}\n` +
+                    `Leasing: ${leasingCode}\n` +
+                    `Cabang: ${cabangList.length} cabang\n` +
+                    `Handling: ${form.handling} | Role: ${form.role}`,
+            });
+
+            return;
+        }
+
+        const MAX_WA_CABANG = 100;
+
+        // jabatan 2/3 → tampilkan menu cabang dan simpan pending (TTL 5 menit)
+        await pendingRegStore.set(pkey, {
+            step: "choose_cabang",
+            leasingCode,
+            form,
+            cabangList,
+        });
+
+        // <= 100: kirim menu seperti biasa
+        if (cabangList.length <= MAX_WA_CABANG) {
+            await sendText({
+                ...ctx,
+                message:
+                    `📌 Pilih cabang untuk ${leasingCode}:\n\n` +
+                    `${formatCabangMenu(cabangList)}\n\n` +
+                    (form.jabatan === 2
+                        ? "✅ *WAJIB reply/quote pesan ini* lalu balas nomor cabang (bisa beberapa, pisahkan koma). Contoh: 1,3,7"
+                        : "✅ *WAJIB reply/quote pesan ini* lalu balas *1 nomor cabang saja*. Contoh: 5"),
+            });
+            return;
+        }
+
+        // > 100: kirim link temp 5 menit ke HTML API
+        const PUBLIC_BASE = process.env.PUBLIC_BASE_URL;
+        if (!PUBLIC_BASE) {
+            await sendText({ ...ctx, message: "❌ PUBLIC_BASE_URL belum diset di env." });
+            return;
+        }
+
+        const targetUrl = `https://api.digitalmanager.id/api/list/cabang?leasing=${encodeURIComponent(leasingCode)}`;
+        const { token } = createTempLink(targetUrl, 5 * 60 * 1000);
+        const link = `${PUBLIC_BASE}/api/temp/temp-links/${token}`;
+
+        await sendText({
+            ...ctx,
+            message:
+                `📌 Cabang untuk ${leasingCode} terlalu banyak (${cabangList.length}).\n\n` +
+                `Buka link ini (aktif 5 menit) untuk lihat nomor cabang:\n${link}\n\n` +
+                (form.jabatan === 2
+                    ? "✅ *WAJIB reply/quote pesan link ini* lalu balas nomor cabang (bisa beberapa). Contoh: 1,2,9"
+                    : "✅ *WAJIB reply/quote pesan link ini* lalu balas *1 nomor cabang saja*. Contoh: 5"),
+        });
+        return;
+    }
+
+// 3) Kalau parsed.ok false, kasih pesan ramah
+    if (parsed && parsed.ok === false) {
+        const msg =
+            parsed.error === "incomplete"
+                ? "❌ Template belum lengkap. Pastikan Nama, Jabatan, dan Kelola_Bahan terisi."
+                : parsed.error === "invalid_jabatan"
+                    ? "❌ Jabatan tidak valid. Isi 1 / 2 / 3."
+                    : parsed.error === "invalid_kelola_bahan"
+                        ? "❌ Kelola_Bahan tidak valid. Isi 1 / 2 / 3."
+                        : "❌ Template tidak valid.";
+        await sendText({ ...ctx, message: msg });
+        return;
+    }
+
 
     if (!key) return; // ignore chat biasa
 
@@ -1378,8 +1964,6 @@ export async function handleIncoming({ instance, webhook }) {
     }
 
     if (key === "list_branch") {
-        // boleh master-only atau boleh semua member group.
-        // aku buat: boleh semua selama bot aktif.
         const r = await listBranchesForGroup(group);
         if (!r.ok) {
             await sendText({ ...ctx, message: `❌ ${r.error}` });
@@ -1389,20 +1973,22 @@ export async function handleIncoming({ instance, webhook }) {
         const leasingCode = r.leasing?.code || "-";
         const level = r.level || "-";
 
-        const branchText =
-            r.branches === "ALL"
-                ? "NASIONAL (ALL cabang)"
-                : Array.isArray(r.branches) && r.branches.length
-                    ? r.branches.join(", ")
-                    : "-";
+        let branchLines = "-";
+        if (r.branches === "ALL") {
+            branchLines = "NASIONAL (ALL cabang)";
+        } else if (Array.isArray(r.branches) && r.branches.length) {
+            branchLines = r.branches
+                .map((b, i) => `${i + 1}. ${String(b).toUpperCase()}`)
+                .join("\n");
+        }
 
         await sendText({
             ...ctx,
             message:
                 `📌 Konfigurasi Cabang Group\n` +
-                `Leasing: ${leasingCode}\n` +
-                `Level: ${level}\n` +
-                `Cabang: ${branchText}`,
+                `Leasing: ${String(leasingCode).toUpperCase()}\n` +
+                `Level: ${String(level).toUpperCase()}\n` +
+                `Cabang:\n${branchLines}`,
         });
         return;
     }
@@ -1434,9 +2020,47 @@ export async function handleIncoming({ instance, webhook }) {
         return;
     }
 
+
+    if (key === "delete_user") {
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
+        const phone = String(args[0] || "").trim();
+
+        console.log(`Deleting user with phone: ${phone}`);
+
+        if (!phone) {
+            await sendText({
+                ...ctx,
+                message: "❌ Format salah.\nContoh:\ndelete user 085754855140",
+            });
+            return;
+        }
+
+        await sendText({ ...ctx, message: "⏳ Menghapus user..." });
+
+        const res = await deleteLeasingUser({ phoneNumber: phone });
+
+        if (!res.ok) {
+            await sendText({
+                ...ctx,
+                message: `❌ Gagal hapus user.\n${res.error}`,
+            });
+            return;
+        }
+
+        await sendText({
+            ...ctx,
+            message: `✅ User berhasil dihapus.\nPhone: ${phone}`,
+        });
+
+        return;
+    }
+
     // ===== template: input data motor/r2 =====
     // ===== template: input data motor/r2 =====
     if (key === "input_data_r2" || key === "input_data_r4") {
+        if (!(await guardFeature({ groupId: group.id, featureKey: "input_data_r2" || "input_data_r4", ctx, sendText }))) {
+            return;
+        }
         const modeKey = String(await getModeKeyCached(group.mode_id) || "").toLowerCase();
 
         const type = key === "input_data_r4" ? "R4" : "R2";
@@ -1461,6 +2085,9 @@ export async function handleIncoming({ instance, webhook }) {
     // ===== hapus nopol (bulk + quote single) =====
 
     if (key === "delete_nopol") {
+        if (!(await guardFeature({ groupId: group.id, featureKey: "delete_nopol", ctx, sendText }))) {
+            return;
+        }
         const nopolList = parseNopolList(args[0] || "", argsLines);
 
         const modeKey = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
@@ -1473,17 +2100,11 @@ export async function handleIncoming({ instance, webhook }) {
         const quotedOnly = Boolean(meta?.quotedOnly);
 
         // =========================
-        // 1) QUOTED ONLY (command "hapus")
+        // 1) QUOTED ONLY (command "hapus") -> bikin pending (file json)
         // =========================
         if (quotedOnly) {
             const quotedText = getQuotedText(webhook);
-            if (!quotedText) {
-                await sendText({
-                    ...ctx,
-                    message: "❌ Perintah *hapus* harus dengan reply/quote pesan notif / hasil cek nopol.",
-                });
-                return;
-            }
+            if (!quotedText) return; // no response
 
             const nopol = parseNopolFromText(quotedText);
             if (!nopol) {
@@ -1493,17 +2114,12 @@ export async function handleIncoming({ instance, webhook }) {
 
             let leasingCode = parseLeasingCodeFromText(quotedText);
 
-            // MODE LEASING: fallback ke leasing group jika quote tidak ada leasing
             if (!leasingCode && modeKey === "leasing") {
-                if (!group.leasing_id) {
-                    await sendText({ ...ctx, message: "❌ Leasing tidak ditemukan di quote dan group belum diset leasing." });
-                    return;
-                }
+                if (!group.leasing_id) return;
                 const leasing = await LeasingCompany.findByPk(group.leasing_id);
                 leasingCode = String(leasing?.code || "").toUpperCase();
             }
 
-            // MODE INPUT_DATA: wajib ada leasing di quote (biar konsisten)
             if (!leasingCode) {
                 await sendText({
                     ...ctx,
@@ -1514,19 +2130,81 @@ export async function handleIncoming({ instance, webhook }) {
                 return;
             }
 
-            await WaDeleteHistory.create({
-                chat_id: group.chat_id,
-                nopol,
-                sender: phone,
-                leasing_code: leasingCode,
-                delete_reason: null,
-                status: "PENDING",
-                requested_at: new Date(),
+            // =========================
+            // CEK DULU KE API
+            // =========================
+            let cekRes;
+            try {
+                cekRes = await cekNopolFromApi(String(nopol).toUpperCase());
+            } catch (e) {
+                await sendText({
+                    ...ctx,
+                    message: `❌ Gagal cek data nopol sebelum hapus.\n${e?.message || "Unknown error"}`,
+                });
+                return;
+            }
+
+            // kalau tidak ditemukan, STOP di sini
+            if (!cekRes?.ok) {
+                await sendText({
+                    ...ctx,
+                    message:
+                        `❌ Nopol *${String(nopol).toUpperCase()}* tidak ditemukan.\n` +
+                        `Penghapusan dibatalkan.`,
+                });
+                return;
+            }
+
+            // validasi leasing hasil cek vs leasing target
+            const actualLeasing = String(cekRes?.leasing_code || cekRes?.leasing || "").trim().toUpperCase();
+            const expectedLeasing = String(leasingCode || "").trim().toUpperCase();
+
+            if (expectedLeasing && actualLeasing && actualLeasing !== expectedLeasing) {
+                await sendText({
+                    ...ctx,
+                    message:
+                        `❌ Data ditemukan, tetapi leasing tidak sesuai.\n` +
+                        `Nopol: *${String(nopol).toUpperCase()}*\n` +
+                        `Leasing data: *${actualLeasing}*\n` +
+                        `Leasing target: *${expectedLeasing}*`,
+                });
+                return;
+            }
+
+            // =========================
+            // BARU lanjut pending alasan
+            // =========================
+            const sender = webhook?.senderData?.sender || "";
+            const pKey = makePendingKey({ chatId, sender });
+
+
+            const hist = await createDeleteHistory({
+                WaDeleteHistory,
+                chatId,
+                nopol: String(nopol).toUpperCase(),
+                sender,
+                leasingCode: String(leasingCode).toUpperCase(),
+                modeKey,
+                source: "QUOTE_CMD_HAPUS",
                 meta: {
-                    source: "QUOTE_CMD_HAPUS",
-                    modeKey,
-                    quoted_preview: String(quotedText).slice(0, 300),
+                    quotedOnly: true,
+                    quotedText,
+                    cekResult: {
+                        leasing_code: cekRes?.leasing_code || null,
+                        leasing: cekRes?.leasing || null,
+                        source: cekRes?.source || null,
+                        matchedBy: cekRes?.matchedBy || null,
+                    },
                 },
+            });
+
+            await pendingDelStore.set(pKey, {
+                step: "choose_reason",
+                modeKey,
+                nopol: String(nopol).toUpperCase(),
+                leasingCode: String(leasingCode).toUpperCase(),
+                source: "QUOTE_CMD_HAPUS",
+                historyId: hist.id,
             });
 
             const reasonsText = DELETE_REASONS.map((r, i) => `${i + 1}. ${r}`).join("\n");
@@ -1534,8 +2212,8 @@ export async function handleIncoming({ instance, webhook }) {
             await sendText({
                 ...ctx,
                 message:
-                    `Anda akan menghapus nopol *${nopol}* dari leasing *${leasingCode}*.\n\n` +
-                    `Tag pesan ini dan pilih alasan penghapusan dengan mengetik nomor alasan (contoh: 1):\n` +
+                    `Data ditemukan. Anda akan menghapus nopol *${String(nopol).toUpperCase()}* dari leasing *${String(leasingCode).toUpperCase()}*.\n\n` +
+                    `*WAJIB REPLY pesan ini* lalu ketik nomor alasan (contoh: 1):\n` +
                     reasonsText,
             });
 
@@ -1543,7 +2221,7 @@ export async function handleIncoming({ instance, webhook }) {
         }
 
         // =========================
-        // 2) TANPA QUOTE: tidak ada nopol -> tampilkan format
+        // 2) TANPA QUOTE: tidak ada nopol -> tampilkan format (rule lama)
         // =========================
         if (nopolList.length === 0) {
             await sendText({
@@ -1559,14 +2237,12 @@ export async function handleIncoming({ instance, webhook }) {
         }
 
         // =========================
-        // 3) TANPA QUOTE: jika 1 nopol -> minta reason (pending)
-        // =========================
+// 3) SINGLE (1 nopol): boleh TANPA QUOTE untuk memulai (rule lama),
+//    tapi KONFIRMASI alasan tetap WAJIB QUOTE menu alasan (ditangani di tryConfirm...)
+// =========================
         if (nopolList.length === 1) {
             const nopol = String(nopolList[0] || "").trim().toUpperCase();
-            if (!nopol) {
-                await sendText({ ...ctx, message: "❌ Nopol tidak valid." });
-                return;
-            }
+            if (!nopol) return;
 
             let leasingCode = "";
 
@@ -1580,7 +2256,7 @@ export async function handleIncoming({ instance, webhook }) {
                 leasingCode = String(leasing?.code || "").toUpperCase();
             }
 
-            // MODE INPUT_DATA: leasing wajib disebut di command (single text juga)
+            // MODE INPUT_DATA: leasing wajib disebut di command
             if (modeKey === "input_data") {
                 leasingCode = String(args[0] || "").trim().toUpperCase();
                 if (!leasingCode) {
@@ -1601,15 +2277,74 @@ export async function handleIncoming({ instance, webhook }) {
                 return;
             }
 
-            await WaDeleteHistory.create({
-                chat_id: group.chat_id,
+            // =========================
+            // CEK DULU KEBERADAAN NOPOL
+            // =========================
+            let cekRes;
+            try {
+                cekRes = await cekNopolFromApi(nopol);
+            } catch (e) {
+                await sendText({
+                    ...ctx,
+                    message: `❌ Gagal cek data nopol sebelum hapus.\n${e?.message || "Unknown error"}`,
+                });
+                return;
+            }
+
+            if (!cekRes?.ok) {
+                await sendText({
+                    ...ctx,
+                    message:
+                        `❌ Nopol *${nopol}* tidak ditemukan.\n` +
+                        `Penghapusan dibatalkan.`,
+                });
+                return;
+            }
+
+            const actualLeasing = String(cekRes?.leasing_code || cekRes?.leasing || "").trim().toUpperCase();
+            const expectedLeasing = String(leasingCode || "").trim().toUpperCase();
+
+            if (expectedLeasing && actualLeasing && actualLeasing !== expectedLeasing) {
+                await sendText({
+                    ...ctx,
+                    message:
+                        `❌ Data ditemukan, tetapi leasing tidak sesuai.\n` +
+                        `Nopol: *${nopol}*\n` +
+                        `Leasing data: *${actualLeasing}*\n` +
+                        `Leasing target: *${expectedLeasing}*`,
+                });
+                return;
+            }
+
+            const sender = webhook?.senderData?.sender || "";
+            const pKey = makePendingKey({ chatId, sender });
+
+            const hist = await createDeleteHistory({
+                WaDeleteHistory,
+                chatId,
                 nopol,
-                sender: phone,
-                leasing_code: leasingCode,
-                delete_reason: null,
-                status: "PENDING",
-                requested_at: new Date(),
-                meta: { source: "SINGLE_TEXT", modeKey },
+                sender,
+                leasingCode,
+                modeKey,
+                source: "SINGLE_TEXT",
+                meta: {
+                    quotedOnly: false,
+                    cekResult: {
+                        leasing_code: cekRes?.leasing_code || null,
+                        leasing: cekRes?.leasing || null,
+                        source: cekRes?.source || null,
+                        matchedBy: cekRes?.matchedBy || null,
+                    },
+                },
+            });
+
+            await pendingDelStore.set(pKey, {
+                step: "choose_reason",
+                modeKey,
+                nopol,
+                leasingCode,
+                source: "SINGLE_TEXT",
+                historyId: hist.id,
             });
 
             const reasonsText = DELETE_REASONS.map((r, i) => `${i + 1}. ${r}`).join("\n");
@@ -1617,8 +2352,8 @@ export async function handleIncoming({ instance, webhook }) {
             await sendText({
                 ...ctx,
                 message:
-                    `Anda akan menghapus nopol *${nopol}* dari leasing *${leasingCode}*.\n\n` +
-                    `Tag pesan ini dan pilih alasan penghapusan dengan mengetik nomor alasan (contoh: 1):\n` +
+                    `Data ditemukan. Anda akan menghapus nopol *${nopol}* dari leasing *${leasingCode}*.\n\n` +
+                    `*WAJIB REPLY pesan ini* lalu ketik nomor alasan (contoh: 1):\n` +
                     reasonsText,
             });
 
@@ -1626,11 +2361,10 @@ export async function handleIncoming({ instance, webhook }) {
         }
 
         // =========================
-        // 4) BULK (>1): langsung runPaidCommand (sama seperti sebelumnya)
+        // 4) BULK (>1): tetap runPaidCommand (rule lama) + endpoint baru
         // =========================
         let leasingCode = "";
 
-        // MODE LEASING: pakai leasing dari group
         if (modeKey === "leasing") {
             if (!group.leasing_id) {
                 await sendText({ ...ctx, message: "❌ Group ini belum diset leasing. Jalankan: set leasing <kode>" });
@@ -1640,7 +2374,6 @@ export async function handleIncoming({ instance, webhook }) {
             leasingCode = String(leasing?.code || "").toUpperCase();
         }
 
-        // MODE INPUT_DATA: leasing wajib disebut di command (bulk)
         if (modeKey === "input_data") {
             leasingCode = String(args[0] || "").trim().toUpperCase();
             if (!leasingCode) {
@@ -1684,18 +2417,67 @@ export async function handleIncoming({ instance, webhook }) {
 
             replyBuilder: async ({ leasingCode, nopolList }) => {
                 try {
-                    await bulkDeleteNopol({ leasingCode, nopolList });
+                    const apiRes = await bulkDeleteNopol({ leasingCode, nopolList });
+
+                    const success = Array.isArray(apiRes?.success) ? apiRes.success : [];
+                    const notFound = Array.isArray(apiRes?.notFound) ? apiRes.notFound : [];
+                    const successCount = Number(apiRes?.successCount ?? success.length ?? 0);
+                    const notFoundCount = Number(apiRes?.notFoundCount ?? notFound.length ?? 0);
+
+                    const lines = [];
+                    lines.push(`*HAPUS NOPOL (TITIPAN)*`);
+                    lines.push(`Leasing: *${String(apiRes?.leasing || leasingCode).toUpperCase()}*`);
+                    lines.push(`Requested: *${apiRes?.requested ?? nopolList.length}*`);
+
+                    if (successCount > 0) {
+                        lines.push(`✅ Berhasil dihapus (*${successCount}*):`);
+                        lines.push(success.map((x) => `• ${String(x).toUpperCase()}`).join("\n"));
+                    }
+
+                    if (notFoundCount > 0) {
+                        lines.push(`➖ Tidak ditemukan (*${notFoundCount}*):`);
+                        lines.push(notFound.map((x) => `• ${String(x).toUpperCase()}`).join("\n"));
+                    }
+
+                    if (successCount === 0 && notFoundCount > 0) {
+                        lines.push(`➖ Tidak ada nopol yang dihapus karena tidak ditemukan.`);
+                    }
 
                     return {
-                        text: "Data berhasil dihapus",
-                        chargeable: true,
-                        chargeUnits: nopolList.length,
+                        text: lines.join("\n").trim(),
+                        // RULE LAMA: charge hanya kalau ada sukses
+                        chargeable: successCount > 0,
+                        chargeUnits: successCount,
                     };
                 } catch (e) {
+                    const d = e?.response?.data;
+
+                    if (d?.ok === false && /leasing/i.test(String(d?.message || ""))) {
+                        const mismatch = Array.isArray(d?.mismatch) ? d.mismatch : [];
+                        const details = mismatch.length
+                            ? "\n" + mismatch.map((x) => `• ${String(x.nopol || "").toUpperCase()} (actual: ${String(x.actualLeasing || "-").toUpperCase()})`).join("\n")
+                            : "";
+
+                        return {
+                            text:
+                                `❌ Gagal hapus nopol (leasing tidak sesuai).\n` +
+                                `Param leasing: *${String(d?.leasingParam || "").toUpperCase()}*\n` +
+                                `Mismatch: *${d?.mismatchCount ?? mismatch.length}*` +
+                                details,
+                            chargeable: false,
+                            chargeUnits: 0,
+                        };
+                    }
+
+                    const msg =
+                        (typeof d === "string" ? d : (d?.error || d?.message)) ||
+                        e?.message ||
+                        "Unknown error";
+
                     return {
-                        text: `❌ Gagal hapus nopol.\n${e?.response?.data?.error || e.message}`,
+                        text: `❌ Gagal hapus nopol.\n${msg}`,
                         chargeable: false,
-                        chargeUnits: 1,
+                        chargeUnits: 0,
                     };
                 }
             },
@@ -1708,6 +2490,9 @@ export async function handleIncoming({ instance, webhook }) {
 
     // ... di dalam handleIncoming:
     if (key === "cek_nopol") {
+        if (!(await guardFeature({ groupId: group.id, featureKey: "cek_nopol", ctx, sendText }))) {
+            return;
+        }
         const plate = normPlate(args[0] || "");
         if (!plate) {
             await sendText({ ...ctx, message: "❌ Format: cek nopol AB1234CD" });
@@ -1893,71 +2678,12 @@ export async function handleIncoming({ instance, webhook }) {
     }
 
 
-// ... di dalam handleIncoming, ganti block "history" jadi ini:
-    if (key === "history") {
-        const plate = normPlate(args[0] || "");
-        if (!plate) {
-            await sendText({ ...ctx, message: "❌ Format: history AB1234CD" });
-            return;
-        }
-
-        // Leasing group (kalau group sudah diset leasing)
-        let groupLeasingCode = "";
-        if (group.leasing_id) {
-            const leasingRow = await LeasingCompany.findByPk(group.leasing_id, { attributes: ["code"] });
-            groupLeasingCode = String(leasingRow?.code || "").trim().toUpperCase();
-        }
-
-        await runPaidCommand({
-            commandKey: "history",
-            group,
-            webhook,
-            ctx,
-            leasingId: group.leasing_id || null,
-            groupId: group.id,
-            args: { plate },
-            replyBuilder: async ({ plate }) => {
-                const r = await getAccessHistoryByNopol(plate);
-
-                if (!r?.ok) return `❌ Gagal ambil history ${plate}`;
-                const items = Array.isArray(r.items) ? r.items : [];
-                if (!items.length) {
-                    return `*HISTORY NOPOL ${plate}*\n*================*\nData tidak ditemukan.`;
-                }
-
-                const dataLeasing = resolveLeasingFromItems(items); // mis. "KREDITPLUS"
-                const dataLeasingUp = String(dataLeasing || "").toUpperCase();
-                const groupLeasingUp = String(groupLeasingCode || "").toUpperCase();
-
-                // jika group sudah set leasing, tapi hasil leasing beda -> info mismatch
-                if (groupLeasingUp && dataLeasingUp && dataLeasingUp !== groupLeasingUp) {
-                    return (
-                        `*HISTORY NOPOL ${plate}*\n` +
-                        `*================*\n` +
-                        `⚠️Data ditemukan, tetapi bukan untuk leasing ini.\n` +
-                        `Leasing data: *${dataLeasingUp}*\n` +
-                        `Leasing group: *${groupLeasingUp}*`
-                    ).trim();
-                }
-
-                // cocok / atau group belum set leasing → tampilkan normal
-                const msg = formatHistoryMessage({
-                    nopol: plate,
-                    leasing: dataLeasingUp || groupLeasingUp || "-",
-                    items,
-                    page: 1,
-                    perPage: 10,
-                });
-
-                return msg;
-            },
-        });
-
-        return;
-    }
 
 // command: request lokasi
     if (key === "history") {
+        if (!(await guardFeature({ groupId: group.id, featureKey: "history", ctx, sendText }))) {
+            return;
+        }
         const plate = normPlate(args[0] || "");
         if (!plate) {
             await sendText({ ...ctx, message: "❌ Format: history AB1234CD" });
@@ -2015,14 +2741,181 @@ export async function handleIncoming({ instance, webhook }) {
 
                 // ✅ tampil normal (cocok / group belum set leasing) -> charge
                 const msg = formatHistoryMessage({
-                    nopol: plate,
+                    nopol: r?.resolvedNopol || plate,
                     leasing: dataLeasingUp || groupLeasingUp || "-",
                     items,
                     page: 1,
                     perPage: 10,
+                    mode: r?.mode || "",
+                    input: r?.input || plate,
                 });
 
                 return { text: msg, chargeable: true };
+            },
+        });
+
+        return;
+    }
+
+    if (key === "request_lokasi") {
+        if (!(await guardFeature({ groupId: group.id, featureKey: "request_lokasi", ctx, sendText }))) {
+            return;
+        }
+        const rawInput = [args[0], ...(argsLines || [])].filter(Boolean).join(" ").trim();
+        const { phone: targetPhone, name: targetName } = parseRequestLokasiInput(rawInput);
+
+        if (!targetPhone && !targetName) {
+            await sendText({
+                ...ctx,
+                message: "❌ Format:\nrequest_lokasi 081385695993\natau\nrequest_lokasi Andilau Soares",
+            });
+            return;
+        }
+
+        const modeKey = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
+        const isGateway = modeKey === "gateway";
+
+        const labelTarget = targetPhone || targetName;
+
+        // ====== MODE GATEWAY: hasil sukses -> PERSONAL ======
+        if (isGateway) {
+            const personalChatId = webhook?.senderData?.sender || null;
+
+            const toPersonalChatId = (v) => {
+                const s = String(v || "").trim();
+                if (!s) return "";
+                if (s.includes("@c.us") || s.includes("@lid")) return s;
+                if (s.includes("@")) return s;
+                return `${s}@c.us`;
+            };
+
+            const sendPersonal = async (message) => {
+                const target = toPersonalChatId(personalChatId || phone);
+                if (!target) return false;
+                await sendText({ ...ctx, chatId: target, message });
+                return true;
+            };
+
+            // 1) PRECHECK PERSONAL
+            const pre = await checkAndDebit({
+                commandKey: "request_lokasi",
+                group,
+                webhook,
+                ref_type: "WA_MESSAGE",
+                ref_id: webhook?.idMessage || null,
+                notes: `request_lokasi:${labelTarget}`,
+                phone_e164: phone,
+                debit: false,
+                units: 1,
+                wallet_scope_override: "PERSONAL",
+            });
+
+            if (!pre.ok) {
+                await sendText({ ...ctx, message: `❌ ${pre.error || "Gagal billing"}` });
+                return;
+            }
+
+            if (!pre.allowed) {
+                await sendText({
+                    ...ctx,
+                    message:
+                        `❌ ${pre.error || "Tidak diizinkan"}\n\n` +
+                        `ℹ️ Mode gateway memakai *saldo personal*. Silakan isi saldo personal terlebih dulu melalui nomor Admin +6285250505445`,
+                });
+                return;
+            }
+
+            // 2) CALL API
+            let r;
+            try {
+                r = await requestLokasiTerbaru({
+                    phone: targetPhone,
+                    name: targetName,
+                });
+            } catch (e) {
+                await sendText({
+                    ...ctx,
+                    message: `❌ Error request lokasi.\n${e?.message || "Unknown error"}`,
+                });
+                return;
+            }
+
+            // 3) not found -> GROUP only, no debit
+            if (!r?.ok) {
+                await sendText({
+                    ...ctx,
+                    message: `❌ Lokasi terbaru tidak ditemukan untuk *${labelTarget}*`,
+                });
+                return;
+            }
+
+            // 4) DEBIT PERSONAL
+            const bill = await checkAndDebit({
+                commandKey: "request_lokasi",
+                group,
+                webhook,
+                ref_type: "WA_MESSAGE",
+                ref_id: webhook?.idMessage || null,
+                notes: `request_lokasi:${labelTarget}`,
+                phone_e164: phone,
+                debit: true,
+                units: 1,
+                wallet_scope_override: "PERSONAL",
+            });
+
+            if (!bill.ok || !bill.allowed) {
+                await sendText({ ...ctx, message: `❌ ${bill.error || "Kredit tidak cukup"}` });
+                return;
+            }
+
+            // 5) PERSONAL result
+            const resultText = formatRequestLokasiMessage(r);
+            const personalMsg =
+                `${resultText}\n\n` +
+                `💳 Kredit terpakai: ${bill.credit_cost}\n` +
+                `Sisa: ${bill.balance_after}`;
+
+            await sendPersonal(personalMsg);
+
+            // 6) GROUP notif
+            await sendText({
+                ...ctx,
+                message: `✅ Lokasi terbaru untuk *${labelTarget}* ditemukan.\n📩 Detail dikirim ke chat pribadi pengirim.`,
+            });
+
+            return;
+        }
+
+        // ====== MODE LAIN: langsung ke GROUP ======
+        await runPaidCommand({
+            commandKey: "request_lokasi",
+            group,
+            webhook,
+            ctx,
+            phone_e164: phone,
+            args: {
+                targetPhone,
+                targetName,
+                labelTarget,
+            },
+            replyBuilder: async ({ targetPhone, targetName, labelTarget }) => {
+                const r = await requestLokasiTerbaru({
+                    phone: targetPhone,
+                    name: targetName,
+                });
+
+                if (!r?.ok) {
+                    return {
+                        text: `❌ Lokasi terbaru tidak ditemukan untuk *${labelTarget}*`,
+                        chargeable: false,
+                    };
+                }
+
+                return {
+                    text: formatRequestLokasiMessage(r),
+                    chargeable: true,
+                    chargeUnits: 1,
+                };
             },
         });
 
@@ -2059,9 +2952,10 @@ export async function handleIncoming({ instance, webhook }) {
         return;
     }
 
-
-
     if (key === "tarik_report") {
+        if (!(await guardFeature({ groupId: group.id, featureKey: "tarik_report", ctx, sendText }))) {
+            return;
+        }
         // master-only atau boleh semua? aku bikin master-only biar aman
         // if (!master) return;
 
@@ -2127,12 +3021,12 @@ export async function handleIncoming({ instance, webhook }) {
             const tanggalLabel = parsed.tanggal ? `-${String(parsed.tanggal).padStart(2, "0")}` : "";
             const filename = `report-access-${leasingCode}-${parsed.tahun}-${String(parsed.bulan).padStart(2, "0")}${tanggalLabel}.xlsx`;
 
-            const meta = await saveTempXlsx(buf, filename);
+            const meta = await saveTempFile(buf, filename);
 
 // base public untuk link
             const PUBLIC_BASE = process.env.PUBLIC_BASE_URL;
 // contoh: https://check.onestopcheck.id  atau domain yang bisa diakses user WA
-            const link = `${PUBLIC_BASE}/api/temp-reports/dl/report/${meta.token}`;
+            const link = `${PUBLIC_BASE}/api/temp-files/dl/${meta.token}`;
 
             await sendText({
                 ...ctx,
@@ -2150,7 +3044,85 @@ export async function handleIncoming({ instance, webhook }) {
         return;
     }
 
+    if (key === "report_pengguna") {
+        // hanya master
+        if (!master) {
+            await sendText({
+                ...ctx,
+                message: "❌ Command ini hanya bisa digunakan oleh master.",
+            });
+            return;
+        }
+
+        // hanya mode management
+        const modeKey = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
+        if (modeKey !== "management") {
+            await sendText({
+                ...ctx,
+                message: "❌ Command ini hanya bisa dipakai di group dengan mode management.",
+            });
+            return;
+        }
+
+        const baseUrl = "https://api.digitalmanager.id";
+        if (!baseUrl) {
+            await sendText({ ...ctx, message: "❌ BASE_URL belum diset di env." });
+            return;
+        }
+
+        await sendText({ ...ctx, message: "⏳ Sedang menyiapkan report pengguna excel..." });
+
+        try {
+            const buf = await fetchUsersReportXlsx({ baseUrl });
+
+            const now = new Date();
+            const yyyy = now.getFullYear();
+            const mm = String(now.getMonth() + 1).padStart(2, "0");
+            const dd = String(now.getDate()).padStart(2, "0");
+            const hh = String(now.getHours()).padStart(2, "0");
+            const mi = String(now.getMinutes()).padStart(2, "0");
+
+            const filename = `report-pengguna-${yyyy}${mm}${dd}-${hh}${mi}.xlsx`;
+
+            const meta = await saveTempFile(
+                buf,
+                filename,
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            );
+
+            const PUBLIC_BASE = process.env.PUBLIC_BASE_URL;
+            if (!PUBLIC_BASE) {
+                await sendText({
+                    ...ctx,
+                    message: "❌ PUBLIC_BASE_URL belum diset di env.",
+                });
+                return;
+            }
+
+            const link = `${PUBLIC_BASE}/api/temp-files/dl/${meta.token}`;
+
+            await sendText({
+                ...ctx,
+                message:
+                    `✅ Report pengguna siap.\n` +
+                    `Mode: MANAGEMENT\n` +
+                    `Akses: MASTER ONLY\n\n` +
+                    `⬇️ Download (berlaku 5 menit):\n${link}`,
+            });
+        } catch (e) {
+            await sendText({
+                ...ctx,
+                message: `❌ Gagal tarik report pengguna.\n${e?.message || "Unknown error"}`,
+            });
+        }
+
+        return;
+    }
+
     if (key === "rekap_data") {
+        if (!(await guardFeature({ groupId: group.id, featureKey: "rekap_data", ctx, sendText }))) {
+            return;
+        }
         if (!group.leasing_id) {
             await sendText({ ...ctx, message: "❌ Leasing group belum diset. Jalankan: set leasing <kode>" });
             return;
@@ -2216,8 +3188,8 @@ export async function handleIncoming({ instance, webhook }) {
 
             // excel flow (baik karena forceExcel atau API balas xlsx)
             const filename = `rekap-data-${leasingCode}-${Date.now()}.xlsx`;
-            const meta = await saveTempXlsx(buffer || Buffer.from([]), filename);
-            const link = `${PUBLIC_BASE}/api/temp-reports/dl/report/${meta.token}`;
+            const meta = await saveTempFile(buffer || Buffer.from([]), filename);
+            const link = `${PUBLIC_BASE}/api/temp-files/dl/${meta.token}`;
 
             await sendText({
                 ...ctx,
@@ -2229,6 +3201,336 @@ export async function handleIncoming({ instance, webhook }) {
             });
         } catch (e) {
             await sendText({ ...ctx, message: `❌ Gagal ambil rekap.\n${e?.message || "Unknown error"}` });
+        }
+
+        return;
+    }
+
+    if (key === "get_statistik") {
+        if (!(await guardFeature({ groupId: group.id, featureKey: "get_statistik", ctx, sendText }))) {
+            return;
+        }
+        // leasing wajib dari group
+        if (!group.leasing_id) {
+            await sendText({ ...ctx, message: "❌ Leasing group belum diset. Jalankan: set leasing <kode>" });
+            return;
+        }
+
+        const leasingRow = await LeasingCompany.findByPk(group.leasing_id, { attributes: ["code"] });
+        const leasingCode = String(leasingRow?.code || "").trim().toUpperCase();
+        if (!leasingCode) {
+            await sendText({ ...ctx, message: "❌ Leasing group invalid." });
+            return;
+        }
+
+        // parse args: bisa ada "cabang X ..." + waktu
+        const argsText = (args[0] || "").trim();
+        const parsed = parseStatistikArgs(argsText);
+        if (!parsed.ok) {
+            await sendText({ ...ctx, message: `❌ ${parsed.error}` });
+            return;
+        }
+
+        // cabang default dari group
+        let cabangParam = await resolveCabangParamFromGroup({ group, LeasingBranch, WaGroupLeasingBranch });
+
+        // override cabang jika user tulis "cabang ..."
+        if (parsed.cabangOverride) {
+            cabangParam = parsed.cabangOverride; // hanya cabang itu
+        }
+
+        const PUBLIC_BASE = process.env.PUBLIC_BASE_URL;
+        if (!PUBLIC_BASE) {
+            await sendText({ ...ctx, message: "❌ PUBLIC_BASE_URL belum diset di env." });
+            return;
+        }
+
+        await sendText({ ...ctx, message: "⏳ Sedang tarik gambar statistik..." });
+
+        try {
+            const buf = await fetchAccessStatPng({
+                leasing: leasingCode,
+                cabang: cabangParam || "",
+                year: parsed.year || "",
+                month: parsed.month || "",
+                day: parsed.day || "",
+                start: parsed.start || "",
+                end: parsed.end || "",
+            });
+
+            // nama file rapih
+            const labelSafe = String(parsed.label || "stat")
+                .replace(/[^\w.\-]+/g, "_")
+                .slice(0, 40);
+
+            const filename = `stat-access-${leasingCode}-${labelSafe}.png`;
+
+            const meta = await saveTempFile(buf, filename, "image/png");
+            const link = `${PUBLIC_BASE}/api/temp-files/dl/${meta.token}`;
+
+            await sendText({
+                ...ctx,
+                message:
+                    `✅ Statistik siap.\n` +
+                    `Leasing: ${leasingCode}\n` +
+                    `Cabang: ${cabangParam || "NASIONAL"}\n` +
+                    `Waktu: ${parsed.label}\n\n` +
+                    `🖼️ Link (berlaku 5 menit):\n${link}`,
+            });
+        } catch (e) {
+            await sendText({ ...ctx, message: `❌ Gagal tarik statistik.\n${e?.message || "Unknown error"}` });
+        }
+
+        return;
+    }
+
+    // misal di parseCommandV2 kamu mapping "buat akun" -> key "buat_akun"
+    if (key === "buat_akun") {
+        if (!(await guardFeature({ groupId: group.id, featureKey: "buat_akun", ctx, sendText }))) {
+            return;
+        }
+        const template = buildRegisterTemplate();
+
+        const sent1 = await sendText({ ...ctx, message: template });
+        const quotedId = sent1?.idMessage || sent1?.messageId || sent1?.id;
+
+        await sendText({
+            ...ctx,
+            quotedMessageId: quotedId,
+            message:
+                "Untuk menginput data, salin dan isi template di atas.\n" +
+                "Ket:\n" +
+                "- Jabatan :\n" +
+                "  1 = Handle Nasional\n" +
+                "  2 = Handle Beberapa Cabang\n" +
+                "  3 = Handle 1 Cabang\n" +
+                "- Kelola Bahan :\n" +
+                "  1 = R2\n" +
+                "  2 = R4\n" +
+                "  3 = MIX",
+        });
+
+        return;
+    }
+
+    // =========================
+// ✅ PT: LIST ANGGOTA
+// Command:
+// - list anggota
+// - list anggota aktif
+// - list anggota nonaktif
+// =========================
+    if (key === "pt_list_members") {
+        // hanya mode pt
+        const modeKeyNow = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
+        if (modeKeyNow !== "pt") {
+            await sendText({
+                ...ctx,
+                message: "❌ Command ini hanya bisa dipakai di group dengan mode PT.\nGunakan: set mode pt (master)",
+            });
+            return;
+        }
+
+        if (!group.pt_company_id) {
+            await sendText({
+                ...ctx,
+                message: "❌ PT group belum diset.\nGunakan: set pt <nama pt> (master)",
+            });
+            return;
+        }
+
+        const ptRow = await PtCompany.findByPk(group.pt_company_id, { attributes: ["code", "name"] });
+        const ptName = String(ptRow?.name || ptRow?.code || "").trim();
+        if (!ptName) {
+            await sendText({ ...ctx, message: "❌ Data PT tidak valid di group." });
+            return;
+        }
+
+        const mode = String(args?.[0] || "all").toLowerCase(); // all|active|inactive
+
+        await sendText({ ...ctx, message: "⏳ Sedang ambil list anggota PT..." });
+
+        try {
+            const r = await fetchPtMembers({ ptName, mode });
+
+            const messages = buildPtMembersMessages({
+                pt: r.pt || ptName,
+                mode: r.mode,
+                items: r.items,
+                count: r.count,
+            });
+
+            // kirim bertahap (biar WA aman)
+            for (let i = 0; i < messages.length; i++) {
+                await sendText({ ...ctx, message: messages[i] });
+
+                // optional: jeda dikit biar gak “spam flood”
+                if (i < messages.length - 1) {
+                    await new Promise((resolve) => setTimeout(resolve, 350));
+                }
+            }
+        } catch (e) {
+            const status = e?.response?.status;
+            const data = e?.response?.data;
+            const errMsg =
+                typeof data === "string"
+                    ? data
+                    : (data?.error || data?.message || e?.message || "Unknown error");
+
+            await sendText({
+                ...ctx,
+                message: `❌ Gagal ambil anggota PT.\n${status ? `HTTP ${status}\n` : ""}${errMsg}`,
+            });
+        }
+
+        return;
+    }
+
+    if (key === "list_file") {
+        // perintah: "list file front"
+        const dir = (args[0] || "").trim();
+
+        try {
+            const data = await listSftpFiles({ dir });
+            const files = Array.isArray(data.files) ? data.files : [];
+
+            if (!files.length) {
+                await sendText({
+                    ...ctx,
+                    message:
+                        `✅ List file OK\n` +
+                        `Dir: ${data.dir}\n` +
+                        `Path: ${data.path || "-"}\n\n` +
+                        `⚠️ Tidak ada file.`,
+                });
+                return;
+            }
+
+            // optional: sort by modifyTime desc
+            files.sort((a, b) => Number(b.modifyTime || 0) - Number(a.modifyTime || 0));
+
+            const lines = files.slice(0, 20).map((f, i) => {
+                return (
+                    `${i + 1}. ${f.name}\n` +
+                    `   size: ${formatBytes(f.size)} | mtime: ${formatTime(f.modifyTime)}`
+                );
+            });
+
+            const more = files.length > 20 ? `\n\n…dan ${files.length - 20} file lainnya.` : "";
+
+            await sendText({
+                ...ctx,
+                message:
+                    `✅ List file OK\n` +
+                    `Dir: ${data.dir}\n` +
+                    `Path: ${data.path || "-"}\n\n` +
+                    lines.join("\n") +
+                    more +
+                    `\n\n📥 Ambil file:\nget file ${data.dir} <nama file>`,
+            });
+        } catch (e) {
+            await sendText({ ...ctx, message: `❌ Gagal list file.\n${e?.message || "Unknown error"}` });
+        }
+        return;
+    }
+
+    if (key === "get_file") {
+        // perintah: "get file front <nama file...>"
+        const dir = (args[0] || "").trim();
+        const fileName = String(args.slice(1).join(" ") || "").trim(); // nama file bisa ada spasi
+
+        if (!dir) {
+            await sendText({ ...ctx, message: "❌ Format: get file <dir> <nama file.xlsx>" });
+            return;
+        }
+        if (!fileName) {
+            await sendText({ ...ctx, message: "❌ Masukkan nama file. Contoh:\nget file front BAHAN_....xlsx" });
+            return;
+        }
+
+        const PUBLIC_BASE = process.env.PUBLIC_BASE_URL;
+        if (!PUBLIC_BASE) {
+            await sendText({ ...ctx, message: "❌ PUBLIC_BASE_URL belum diset di env." });
+            return;
+        }
+
+        await sendText({ ...ctx, message: "⏳ Sedang download file..." });
+
+        try {
+            const { buffer, filename } = await downloadSftpFileXlsx({ dir, file: fileName });
+
+            // simpan temp (TTL 5 menit)
+            const meta = await saveTempFile(buffer, filename);
+
+            // re-use endpoint download temp kamu (kalau sudah ada)
+            // contoh sebelumnya: /api/temp-reports/dl/report/:token
+            // kalau mau dipakai juga untuk file ini, boleh:
+            const link = `${PUBLIC_BASE}/api/temp-files/dl/${meta.token}`;
+
+            await sendText({
+                ...ctx,
+                message:
+                    `✅ File siap.\n` +
+                    `Dir: ${dir}\n` +
+                    `File: ${filename}\n\n` +
+                    `⬇️ Download (berlaku 5 menit):\n${link}`,
+            });
+        } catch (e) {
+            await sendText({ ...ctx, message: `❌ Gagal ambil file.\n${e?.message || "Unknown error"}` });
+        }
+
+        return;
+    }
+
+    if (key === "vpn_up") {
+        await sendText({ ...ctx, message: "⏳ Menghubungkan VPN (ipsec up myvpn)..." });
+
+        try {
+            const r = await vpnUp(); // { ok:true, message, output }
+            const out = String(r?.output || "").trim();
+
+            await sendText({
+                ...ctx,
+                message:
+                    "✅ VPN UP sukses.\n" +
+                    (out ? `\nOutput:\n${out}` : ""),
+            });
+        } catch (e) {
+            await sendText({
+                ...ctx,
+                message: `❌ VPN UP gagal.\n${e?.message || "Unknown error"}`,
+            });
+        }
+        return;
+    }
+
+    if (key === "vpn_status") {
+        await sendText({ ...ctx, message: "⏳ Mengecek status VPN..." });
+
+        try {
+            const r = await vpnStatus(); // { ok:true, output }
+            const out = String(r?.output || "");
+
+            const isEstablished =
+                out.includes("ESTABLISHED") &&
+                !out.includes("0 up");
+
+            if (isEstablished) {
+                await sendText({
+                    ...ctx,
+                    message: "🟢 VPN STATUS: ESTABLISHED (CONNECTED)",
+                });
+            } else {
+                await sendText({
+                    ...ctx,
+                    message: "🔴 VPN STATUS: NOT CONNECTED",
+                });
+            }
+        } catch (e) {
+            await sendText({
+                ...ctx,
+                message: `❌ VPN STATUS gagal.\n${e?.message || "Unknown error"}`,
+            });
         }
 
         return;

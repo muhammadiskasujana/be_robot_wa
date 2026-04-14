@@ -6,7 +6,7 @@ import { enqueueManagementEvent } from "../controllers/notifyManagement.controll
 const router = express.Router();
 
 // POST /api/notify/access
-router.post("/access", asyncWrap(Notify.enqueueAccessNotify));
+router.post("/report", asyncWrap(Notify.enqueueAccessNotify));
 // POST /api/notify/management/activation
 router.post("/management", asyncWrap(enqueueManagementEvent));
 

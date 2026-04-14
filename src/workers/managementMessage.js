@@ -22,6 +22,8 @@ export function buildManagementMessage(p = {}) {
     const hpUser = safeStr(p.no_hp_user || p.hp_user || p.phone_user);
     const namaAdmin = safeStr(p.nama_admin);
     const wilayah = safeStr(p.wilayah, "-");
+    const pt = safeStr(p.pt, "-");
+    const no_pic_pt = safeStr(p.no_pic_pt)
     const tanggal = safeStr(p.tanggal || p.tanggal_aktivasi || p.tanggal_registrasi);
 
     // activation specific
@@ -44,6 +46,7 @@ export function buildManagementMessage(p = {}) {
             lines.push(`User : ${bold(namaUser)}`);
             lines.push(`HP User : ${hpUser}`);
             lines.push(`Wilayah : ${wilayah}`);
+            lines.push(`PT : ${pt}`);
             lines.push(`Aktivasi : ${bold(`${hari} hari`)}`);
             if (Number.isFinite(kuota)) lines.push(`Kuota : ${bold(String(kuota))}`);
             lines.push(`Tanggal : ${tanggal}`);
@@ -58,8 +61,9 @@ export function buildManagementMessage(p = {}) {
             lines.push(`User : ${bold(namaUser)}`);
             lines.push(`HP User : ${hpUser}`);
             lines.push(`Wilayah : ${wilayah}`);
+            lines.push(`PT : ${pt}`);
             lines.push(`Tanggal Registrasi : ${tanggal}`);
-            lines.push(`Sumber : ${sumber}`);
+            lines.push(`Didaftarkan Oleh : ${namaAdmin} (${no_pic_pt})`);
             lines.push(`*User berhasil terdaftar*`);
             return lines.join("\n");
         }
@@ -71,6 +75,7 @@ export function buildManagementMessage(p = {}) {
             lines.push(`User : ${bold(namaUser)}`);
             lines.push(`HP User : ${hpUser}`);
             lines.push(`Wilayah : ${wilayah}`);
+            lines.push(`PT : ${pt}`);
             lines.push(`Alasan : ${alasan}`);
             lines.push(`Tanggal : ${tanggal}`);
             lines.push(`*Akun berhasil dimatikan*`);
@@ -84,6 +89,7 @@ export function buildManagementMessage(p = {}) {
             lines.push(`User : ${bold(namaUser)}`);
             lines.push(`HP User : ${hpUser}`);
             lines.push(`Wilayah : ${wilayah}`);
+            lines.push(`PT : ${pt}`);
             lines.push(`Durasi Suspend : ${bold(`${durasiSuspend} hari`)}`);
             lines.push(`Alasan : ${alasan}`);
             lines.push(`Tanggal : ${tanggal}`);
@@ -98,6 +104,7 @@ export function buildManagementMessage(p = {}) {
             lines.push(`User : ${bold(namaUser)}`);
             lines.push(`HP User : ${hpUser}`);
             lines.push(`Wilayah : ${wilayah}`);
+            lines.push(`PT : ${pt}`);
             lines.push(`Alasan : ${alasan}`);
             lines.push(`Tanggal : ${tanggal}`);
             lines.push(`*Akun telah dihapus permanen*`);

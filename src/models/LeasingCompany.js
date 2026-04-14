@@ -4,6 +4,7 @@ export default (sequelize, DataTypes) => {
                 code: { type: DataTypes.STRING(32), allowNull: false, unique: true },
                 name: { type: DataTypes.STRING(120), allowNull: false },
                 is_active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+                meta: { type: DataTypes.JSONB, allowNull: true, defaultValue: {} },
         }, {
                 tableName: "leasing_companies",
                 underscored: true,

@@ -1,4 +1,4 @@
-// services/newhunterCekNopol.js
+// services/newhunterCekNopol.js  (drop-in replacement, endpoint titipan)
 import axios from "axios";
 import { fetchJsonAdvanced, TTL } from "../cacheService.js";
 
@@ -16,64 +16,54 @@ function extractApiMessage(data) {
     return data?.error || data?.message || data?.msg || "";
 }
 
+/**
+ * NEW: cek nopol dari DigitalManager titipan
+ * GET /api/titipan/cek/data?input=...
+ *
+ * Response:
+ * - ok true, found true, data:{...}
+ * - ok true, found false, message:"Data tidak ditemukan"
+ */
 export async function cekNopolFromApi(q) {
     const query = normQ(q);
     if (!query) throw new Error("param kosong");
 
-    const baseURL = process.env.NEWHUNTER_API_BASE || "https://api-1.newhunter.id";
-    const token = process.env.NEWHUNTER_API_TOKEN;
-    if (!token) throw new Error("NEWHUNTER_API_TOKEN belum diset");
-
-    const cacheKey = `nh:ceknopol:${query}`;
+    const baseURL = process.env.DIGITALMANAGER_API_BASE || "https://api.digitalmanager.id";
+    const cacheKey = `dm:titipan:cek:${query}`;
 
     return fetchJsonAdvanced(
         cacheKey,
         async () => {
-            const url = `${baseURL}/v1/bot/cekNopol`;
+            const url = `${baseURL}/api/titipan/cek/data`;
 
             const res = await axios.get(url, {
-                params: { nopol: query },
-                headers: { Authorization: token },
+                params: { input: query },
                 timeout: 20000,
                 validateStatus: () => true,
             });
 
             if (res.status < 200 || res.status >= 300) {
                 const msg = extractApiMessage(res.data);
-
-                if (res.status === 404) {
-                    // ⬇️ return ok:false (bisa di-negative-cache TTL pendek)
-                    return { ok: false, error: "Data tidak ditemukan", query, status: 404 };
-                }
-
-                if (res.status === 401 || res.status === 403) {
-                    const e = new Error(msg || "Unauthorized (token salah/expired)");
-                    e.status = res.status;
-                    e.code = "UNAUTHORIZED";
-                    throw e;
-                }
-
-                if (res.status === 429) {
-                    const e = new Error(msg || "Rate limit, coba lagi nanti");
-                    e.status = 429;
-                    e.code = "RATE_LIMIT";
-                    throw e;
-                }
-
-                if (res.status >= 500) {
-                    const e = new Error(msg || `Server error (${res.status})`);
-                    e.status = res.status;
-                    e.code = "UPSTREAM_5XX";
-                    throw e;
-                }
-
                 const e = new Error(msg || `Request gagal (${res.status})`);
                 e.status = res.status;
-                e.code = "UPSTREAM_4XX";
+                e.code = res.status >= 500 ? "UPSTREAM_5XX" : "UPSTREAM_4XX";
                 throw e;
             }
 
-            const d = res.data || {};
+            const body = res.data || {};
+            // bentuk not found di API ini: ok true, found false
+            if (body?.ok === true && body?.found === false) {
+                return { ok: false, error: body?.message || "Data tidak ditemukan", query, status: 404 };
+            }
+
+            // bentuk found: ok true, found true, data: {...}
+            if (body?.ok !== true || body?.found !== true || !body?.data) {
+                return { ok: false, error: body?.message || "Data tidak ditemukan", query, status: 404 };
+            }
+
+            const d = body.data || {};
+
+            // Normalisasi output agar handler kamu TIDAK perlu diubah
             const out = {
                 ok: true,
                 nopol: d.nopol ? String(d.nopol).toUpperCase() : "",
@@ -83,10 +73,12 @@ export async function cekNopolFromApi(q) {
                 leasing: d.leasing ? String(d.leasing).trim().toUpperCase() : "",
                 cabang: d.cabang ? String(d.cabang).trim().toUpperCase() : "",
                 ovd: d.ovd != null ? String(d.ovd).trim() : "",
-                contactPerson: d.contactPerson ?? "-",
+                contactPerson: d.contact_person ?? "-",
                 keterangan: d.keterangan ?? "",
                 leasing_code: normalizeLeasingCode(d.leasing),
                 raw: d,
+                source: body.source || "titipan",
+                matchedBy: body.matchedBy || "nopol",
             };
 
             const hasAny = out.nopol || out.noka || out.nosin;
@@ -95,20 +87,15 @@ export async function cekNopolFromApi(q) {
             return out;
         },
         {
-            ttl: 30 * 1000, // cache sukses 30 detik
+            ttl: 30 * 1000,
             shouldCache: (val) => {
-                // cache success selalu
                 if (val?.ok === true) return true;
-
-                // optional: cache "not found" sebentar agar gak spam API
                 if (val?.ok === false && val?.status === 404) return true;
-
-                // selain itu jangan cache
                 return false;
             },
             getTTL: (val) => {
                 if (val?.ok === true) return 30 * 1000;
-                if (val?.ok === false && val?.status === 404) return TTL.NEGATIVE_SHORT; // 10 detik
+                if (val?.ok === false && val?.status === 404) return TTL.NEGATIVE_SHORT;
                 return 0;
             },
         }

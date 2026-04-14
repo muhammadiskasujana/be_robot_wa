@@ -1,4 +1,4 @@
-// services/historyFormatter.js (UPDATE)
+// services/historyFormatter.js
 function safe(s, fallback = "-") {
     const t = String(s ?? "").trim();
     return t ? t : fallback;
@@ -27,7 +27,24 @@ function resolveLeasing(item) {
     return b;
 }
 
-export function formatHistoryMessage({ nopol, leasing, items, page = 1, perPage = 10 }) {
+function resolveNopol(item) {
+    const a = String(item?.nopol || "").trim().toUpperCase();
+    if (a) return a;
+
+    const v = item?.vehicleData || {};
+    const b = String(v["Nopol:"] || v["Nopol"] || "").trim().toUpperCase();
+    return b;
+}
+
+export function formatHistoryMessage({
+                                         nopol,
+                                         leasing,
+                                         items,
+                                         page = 1,
+                                         perPage = 10,
+                                         mode = "",       // << tambah
+                                         input = "",      // << opsional, kalau mau dipakai di header
+                                     }) {
     const total = Array.isArray(items) ? items.length : 0;
     const totalPages = Math.max(1, Math.ceil(total / perPage));
     const p = Math.min(Math.max(page, 1), totalPages);
@@ -35,8 +52,14 @@ export function formatHistoryMessage({ nopol, leasing, items, page = 1, perPage 
     const start = (p - 1) * perPage;
     const slice = (items || []).slice(start, start + perPage);
 
+    const isUserPhoneMode = String(mode || "").toLowerCase() === "user_phone";
+
+    const headerTitle = isUserPhoneMode
+        ? `*HISTORY USER (${safe(input || (slice[0]?.userPhone || ""), "-")})*`
+        : `*HISTORY NOPOL ${safe(nopol, "").toUpperCase()}*`;
+
     const header =
-        `*HISTORY NOPOL ${safe(nopol, "").toUpperCase()}*\n` +
+        `${headerTitle}\n` +
         `*================*\n` +
         `Leasing: *${safe(leasing, "-")}*\n` +
         `Total pengguna yang mengakses : ${total}\n` +
@@ -50,14 +73,16 @@ export function formatHistoryMessage({ nopol, leasing, items, page = 1, perPage 
             const pt = safe(x?.userPt, "Tanpa PT");
             const waktu = safe(x?.accessDate, "-");
 
-            // ✅ tambahan: admin PT
             const adminPT = safe(x?.adminPT, "-");
             const noHpAdmin = safe(x?.noHpAdmin, "-");
+
+            const accessedNopol = resolveNopol(x);
 
             const awal =
                 typeof x?.reportAwal === "string"
                     ? x.reportAwal
                     : (x?.reportAwal?.notes || x?.reportAwal?.kronologis || "");
+
             const akhir =
                 typeof x?.reportAkhir === "string"
                     ? x.reportAkhir
@@ -70,9 +95,15 @@ export function formatHistoryMessage({ nopol, leasing, items, page = 1, perPage 
                 `*Nama: ${name}*\n` +
                 `*HP : (${hp})*\n` +
                 `PT : ${pt}\n` +
-                `PIC PT : ${adminPT}\n` +        // ✅
-                `No HP PIC : ${noHpAdmin}\n` +   // ✅
-                `Waktu Akses : ${waktu}`;
+                `PIC PT : ${adminPT}\n` +
+                `No HP PIC : ${noHpAdmin}\n`;
+
+            // ✅ khusus mode user_phone tampilkan nopol yang diakses
+            if (isUserPhoneMode && accessedNopol) {
+                out += `NOPOL Diakses : ${accessedNopol}\n`;
+            }
+
+            out += `Waktu Akses : ${waktu}`;
 
             if (awal) out += `\nKronologis Awal : ${awal}`;
             if (akhir) out += `\nKronologis Akhir : ${akhir}`;

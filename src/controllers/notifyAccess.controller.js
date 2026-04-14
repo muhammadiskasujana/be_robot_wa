@@ -1,5 +1,6 @@
 import { notifyQueue } from "../queues/notifyQueue.js";
 import crypto from "crypto";
+import {enqueuePtWebNotify} from "../services/enqueuePtWebNotify.js";
 
 function makeJobId(payload) {
     // bikin string deterministic
@@ -40,8 +41,6 @@ function validateBody(body) {
     if (!nopol) errors.push("nopol wajib");
     if (!leasing) errors.push("leasing wajib");
     if (!cabang) errors.push("cabang wajib");
-    // pt optional (karena mode leasing bisa tanpa pt)
-    // tapi kalau kamu ingin wajib saat mode pt, nanti di worker kita cek.
 
     const no_hp = toPhone62(body.no_hp);
     const user = reqStr(body.user);
@@ -50,10 +49,17 @@ function validateBody(body) {
 
     const accessLoc = body.accessLoc || null;
     if (accessLoc) {
-        // validasi ringan
         if (typeof accessLoc.latitude !== "number") errors.push("accessLoc.latitude harus number");
         if (typeof accessLoc.longitude !== "number") errors.push("accessLoc.longitude harus number");
+        // address nullable -> tidak wajib
     }
+
+    const pic_pt = reqStr(body.pic_pt);
+    const no_hp_pic_pt = toPhone62(body.no_hp_pic_pt);
+
+    // ✅ NEW
+    const reportDate = reqStr(body.reportDate);
+    const reportMessage = reqStr(body.reportMessage);
 
     return {
         ok: errors.length === 0,
@@ -63,18 +69,50 @@ function validateBody(body) {
             nosin: up(body.nosin),
             noka: up(body.noka),
             tipe: reqStr(body.tipe),
-            leasing,         // ✅ full untuk ditampilkan (FIF 0226)
-            leasing_code,    // ✅ code untuk lookup (FIF)
+
+            leasing,         // full display
+            leasing_code,    // code untuk lookup
             cabang,
+
             ovd: reqStr(body.ovd),
             contactPerson: reqStr(body.contactPerson),
             keterangan: reqStr(body.keterangan),
+
             user,
             no_hp,
             pt,
-            accessLoc,
+
+            accessLoc: accessLoc
+                ? {
+                    latitude: Number(accessLoc.latitude),
+                    longitude: Number(accessLoc.longitude),
+                    accuracy:
+                        accessLoc.accuracy != null && Number.isFinite(Number(accessLoc.accuracy))
+                            ? Number(accessLoc.accuracy)
+                            : null,
+                    speed:
+                        accessLoc.speed != null && Number.isFinite(Number(accessLoc.speed))
+                            ? Number(accessLoc.speed)
+                            : null,
+                    bearing:
+                        accessLoc.bearing != null && Number.isFinite(Number(accessLoc.bearing))
+                            ? Number(accessLoc.bearing)
+                            : null,
+                    address: reqStr(accessLoc.address), // nullable
+                }
+                : null,
+
             accessDate,
-            raw: body, // optional simpan original kalau perlu
+
+            // PIC PT
+            pic_pt,
+            no_hp_pic_pt,
+
+            // ✅ NEW fields
+            reportDate,
+            reportMessage,
+
+            raw: body,
         },
     };
 }
@@ -176,9 +214,28 @@ export async function enqueueAccessNotify(req, res) {
 
     console.log("[ENQUEUE] payload:", v.payload);
 
+
+    let ptWebQueued = null;
+    try {
+        console.log("[ENQUEUE] queue PT WEB start", {
+            pt: v.payload.pt,
+            nopol: v.payload.nopol,
+            parent_job_id: job.id,
+        });
+
+        ptWebQueued = await enqueuePtWebNotify(v.payload, {
+            parent_job_id: job.id,
+        });
+
+        console.log("[ENQUEUE] queue PT WEB success", ptWebQueued);
+    } catch (e) {
+        console.error("[enqueueAccessNotify] pt web enqueue error", e?.message || e);
+    }
+
     res.json({
         ok: true,
         queued: true,
         jobId: job.id,
+        ptWebQueued,
     });
 }

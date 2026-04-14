@@ -84,6 +84,8 @@ function validateMgmtEventBody(body) {
     const no_hp_user = toPhone62(body.no_hp_user || body.hp_user || body.phone_user);
     const nama_admin = reqStr(body.nama_admin || body.admin || "SYSTEM");
     const tanggal = getTanggal(body);
+    const pt = reqStr(body.pt || body.nama_pt || body.perusahaan);
+    const noPicPt = reqStr(body.no_pic_pt)
 
     if (!event_key) errors.push("event_key wajib");
     if (event_key && !ALLOWED_EVENTS.has(event_key)) {
@@ -124,7 +126,10 @@ function validateMgmtEventBody(body) {
         nama_user,
         no_hp_user,
         nama_admin,
+        no_pic_pt: noPicPt,
         tanggal,
+
+        pt: pt || "", // ✅ penting supaya tidak undefined
 
         // optional common
         wilayah: reqStr(body.wilayah),
