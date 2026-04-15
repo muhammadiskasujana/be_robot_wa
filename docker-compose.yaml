@@ -3,7 +3,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: Dockerfile
     command: ["node", "src/server.js"]
     # TAMBAHKAN BAGIAN INI:
     ports:
