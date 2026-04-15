@@ -3,7 +3,9 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile
-    # BAGIAN INI YANG DIGANTI UNTUK TIAP WORKER:
+      dockerfile: backend/Dockerfile
     command: ["node", "src/server.js"]
+    # TAMBAHKAN BAGIAN INI:
+    ports:
+      - "5678:5678"
     network_mode: bridge
