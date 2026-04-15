@@ -3,7 +3,10 @@
     import IORedis from "ioredis";
     import Sequelize from "sequelize";
     import { QueryTypes } from "sequelize";
-    
+    import axios from "axios";
+    import https from "https";
+
+
     import { checkAndDebit, resolvePolicyCached } from "../services/billingService.js";
     import { WaCommandPolicy, sequelize } from "../models/index.js";
     
@@ -467,21 +470,35 @@
     // =====================
     // send via gateway endpoint
     // =====================
+    const httpsAgent = new https.Agent({
+        rejectUnauthorized: false, // ⛔ bypass SSL (sementara)
+    });
+
     async function sendTextViaGateway({ session_id, to, message, mentions = [] }) {
-        const r = await fetch(WA_SEND_URL, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${WA_BEARER}`,
-                "X-Tenant": WA_TENANT,
-            },
-            body: JSON.stringify({ session_id, to, message, mentions }),
-        });
-    
-        const text = await r.text().catch(() => "");
-        if (!r.ok) throw new Error(`wa-gateway send failed: ${r.status} ${text}`.trim());
-    
-        try { return JSON.parse(text); } catch { return { ok: true, raw: text }; }
+        try {
+            const res = await axios.post(
+                WA_SEND_URL,
+                { session_id, to, message, mentions },
+                {
+                    httpsAgent,
+                    headers: {
+                        "Content-Type": "application/json",
+                        Authorization: `Bearer ${WA_BEARER}`,
+                        "X-Tenant": WA_TENANT,
+                    },
+                    timeout: 15000,
+                }
+            );
+
+            return res.data;
+        } catch (err) {
+            console.error("[sendTextViaGateway axios error]", {
+                message: err.message,
+                status: err.response?.status,
+                data: err.response?.data,
+            });
+            throw err;
+        }
     }
     
     function mgmtCommandKeyForEvent(eventKey = "") {
