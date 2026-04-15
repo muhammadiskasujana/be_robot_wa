@@ -3,7 +3,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: Dockerfile
     # BAGIAN INI YANG DIGANTI UNTUK TIAP WORKER:
     command: ["node", "src/server.js"]
     network_mode: bridge
