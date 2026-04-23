@@ -57,6 +57,37 @@ function isNotifPtActive(meta) {
     return false;
 }
 
+function normalizeLeasingList(value) {
+    if (Array.isArray(value)) {
+        return value
+            .map((x) => up(x))
+            .filter(Boolean);
+    }
+
+    if (typeof value === "string") {
+        const s = value.trim();
+        if (!s) return [];
+
+        // support:
+        // "BFI"
+        // "BFI, ADIRA, FIF"
+        return s
+            .split(",")
+            .map((x) => up(x))
+            .filter(Boolean);
+    }
+
+    return [];
+}
+
+function linkedPtSupportsLeasing(linkedMeta, leasingCode) {
+    const code = up(leasingCode);
+    if (!code) return false;
+
+    const list = normalizeLeasingList(linkedMeta?.leasing);
+    return list.includes(code);
+}
+
 async function sendToPtWeb({ tenantCode, payload }) {
     if (!PT_WEB_BASE_URL) {
         throw new Error("[PT_WEB_NOTIFY] PT_WEB_BASE_URL belum diset");
@@ -158,18 +189,16 @@ async function resolveLinkedPtTargets(payload = {}) {
         });
 
         if (leasing && isNotifPtActive(leasing.meta)) {
-            const linkedByLeasing = await LinkedPT.findAll({
+            const linkedRows = await LinkedPT.findAll({
                 where: {
                     is_active: true,
-                    meta: {
-                        leasing: leasingCode,
-                    },
                 },
                 attributes: ["id", "name", "code", "meta", "is_active"],
             });
 
-            for (const row of linkedByLeasing) {
+            for (const row of linkedRows) {
                 if (!row?.code) continue;
+                if (!linkedPtSupportsLeasing(row.meta, leasingCode)) continue;
 
                 const key = low(row.code);
                 if (seen.has(key)) continue;
