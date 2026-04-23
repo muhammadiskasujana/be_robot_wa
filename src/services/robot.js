@@ -2587,9 +2587,7 @@ export async function handleIncoming({ instance, webhook }) {
                     message:
                         `*CEK NOPOL HUNTER*\n` +
                         `*====================*\n` +
-                        `⚠️ Data ditemukan, tetapi bukan untuk leasing ini.\n` +
-                        `Leasing data: *${dataLeasingUp}*\n` +
-                        `Leasing group: *${groupLeasingUp}*`,
+                        `⚠️ Data ditemukan, tetapi bukan di leasing ini.`,
                 });
                 return;
             }
@@ -2657,9 +2655,7 @@ export async function handleIncoming({ instance, webhook }) {
                     const msg =
                         `*CEK NOPOL HUNTER*\n` +
                         `*====================*\n` +
-                        `⚠️ Data ditemukan, tetapi bukan untuk leasing ini.\n` +
-                        `Leasing data: *${dataLeasingUp}*\n` +
-                        `Leasing group: *${groupLeasingUp}*`;
+                        `⚠️ Data ditemukan, tetapi bukan di leasing ini.`;
                     return { text: msg.trim(), chargeable: false };
                 }
 
