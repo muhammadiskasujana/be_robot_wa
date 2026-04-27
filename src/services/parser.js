@@ -369,6 +369,37 @@ export function parseCommandV2(text, opts = {})  {
         return { key: "pt_list_members", args: ["inactive"], argsLines: lines.slice(1) };
     }
 
+    if (first.startsWith("set filter")) {
+        const afterRaw = first.replace("set filter", "").trim();
+        const after = cleanAfterCommand(afterRaw); // buang ":" "," "-" dst
+
+        // coba ambil mode (only/except) dari baris pertama
+        let mode = "";
+        let leasingRaw = after;
+
+        const modeMatch = after.match(/^(only|except)\b/i);
+        if (modeMatch) {
+            mode = modeMatch[1].toLowerCase();
+            leasingRaw = after.replace(/^(only|except)\b/i, "").trim();
+        }
+
+        // gabung multiline juga
+        const extra = lines.slice(1).join(" ").trim();
+        const combined = [leasingRaw, extra].filter(Boolean).join(" ").trim();
+
+        return {
+            key: "set_filter_leasing",
+            args: mode ? [mode, combined] : [combined],
+            argsLines: lines.slice(1),
+        };
+    }
+
+    // ✅ RESET FILTER LEASING
+    // contoh: "reset filter" atau "hapus filter"
+    if (first === "reset filter" || first === "hapus filter") {
+        return { key: "reset_filter_leasing", args: [], argsLines: lines.slice(1) };
+    }
+
     // request lokasi 08123...
     if (first.startsWith("request lokasi")) {
         const after = first.replace("request lokasi", "").trim();

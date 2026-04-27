@@ -2939,6 +2939,140 @@ export async function handleIncoming({ instance, webhook }) {
         return;
     }
 
+
+    // ✅ SET FILTER LEASING (only / except)
+    if (key === "set_filter_leasing") {
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
+
+        const modeKey = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
+        if (modeKey !== "pt") {
+            await sendText({
+                ...ctx,
+                message: "❌ Command ini hanya untuk mode PT.\nGunakan: set mode pt",
+            });
+            return;
+        }
+
+        // args[0] = "only" atau "except" atau langsung leasing list
+        // args[1] = leasing list (jika args[0] adalah mode)
+        let filterMode = "";
+        let leasingInput = "";
+
+        if (args.length >= 2 && ["only", "except"].includes(String(args[0] || "").toLowerCase())) {
+            filterMode = String(args[0]).toLowerCase();
+            leasingInput = String(args[1] || "").trim();
+        } else {
+            // fallback: coba ambil dari text
+            const fallbackText = String(text || "").trim().toLowerCase();
+            const match = fallbackText.match(/^set\s+filter\s+(only|except)\b/i);
+            if (match) {
+                filterMode = match[1].toLowerCase();
+                leasingInput = fallbackText.replace(/^set\s+filter\s+(only|except)\b/i, "").trim();
+            }
+        }
+
+        if (!filterMode) {
+            await sendText({
+                ...ctx,
+                message:
+                    "❌ Format:\n" +
+                    "set filter only BFI, ADIRA\n" +
+                    "atau:\n" +
+                    "set filter except MANDIRI\n" +
+                    "atau multiline:\n" +
+                    "set filter only\nBFI\nADIRA",
+            });
+            return;
+        }
+
+        if (!["only", "except"].includes(filterMode)) {
+            await sendText({
+                ...ctx,
+                message:
+                    "❌ Mode filter tidak valid. Gunakan 'only' atau 'except'.\n" +
+                    "Contoh: set filter only BFI, ADIRA",
+            });
+            return;
+        }
+
+        // parse leasing list dari leasingInput + multiline
+        let allLeasingTokens = [];
+        if (leasingInput) {
+            allLeasingTokens.push(leasingInput);
+        }
+        if (Array.isArray(argsLines) && argsLines.length) {
+            allLeasingTokens.push(...argsLines);
+        }
+
+        // flatten dan normalize
+        const leasingList = allLeasingTokens
+            .flatMap((t) => String(t).split(","))
+            .map((s) => s.trim().toUpperCase())
+            .filter(Boolean)
+            .filter((v, idx, arr) => arr.indexOf(v) === idx); // unique
+
+        if (!leasingList.length) {
+            await sendText({
+                ...ctx,
+                message:
+                    "❌ Daftar leasing kosong.\n" +
+                    "Contoh: set filter only BFI, ADIRA, FIF",
+            });
+            return;
+        }
+
+        // set di meta group
+        group.meta = group.meta && typeof group.meta === "object" ? group.meta : {};
+        group.meta.leasing_filter = {
+            mode: filterMode,
+            leasing: leasingList,
+        };
+
+        await group.save();
+
+        await sendText({
+            ...ctx,
+            message:
+                `✅ Filter leasing diset: *${filterMode.toUpperCase()}*\n` +
+                `Daftar: ${leasingList.join(", ")}\n\n` +
+                (filterMode === "only"
+                    ? "📌 Group ini hanya akan menerima notif dari leasing: " + leasingList.join(", ")
+                    : "📌 Group ini akan menerima notif dari semua leasing KECUALI: " + leasingList.join(", ")),
+        });
+        return;
+    }
+
+    // ✅ RESET FILTER LEASING
+    if (key === "reset_filter_leasing") {
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
+
+        const modeKey = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
+        if (modeKey !== "pt") {
+            await sendText({
+                ...ctx,
+                message: "❌ Command ini hanya untuk mode PT.\nGunakan: set mode pt",
+            });
+            return;
+        }
+
+        group.meta = group.meta && typeof group.meta === "object" ? group.meta : {};
+
+        // hapus filter
+        if (group.meta.leasing_filter) {
+            delete group.meta.leasing_filter;
+        }
+
+        await group.save();
+
+        await sendText({
+            ...ctx,
+            message:
+                "✅ Filter leasing berhasil dihapus.\n" +
+                "Group ini akan menerima notif dari semua leasing (tanpa filter).",
+        });
+        return;
+    }
+
 // optional: unset pt
     if (key === "unset_pt") {
         if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
