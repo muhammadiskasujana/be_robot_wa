@@ -10,7 +10,6 @@ export default function (sequelize, DataTypes) {
             name: {
                 type: DataTypes.STRING(255),
                 allowNull: false,
-                unique: true,
                 comment: "Nama PT, contoh: PT LINTAS BORNEO SUKSES",
             },
             code: {
@@ -43,7 +42,6 @@ export default function (sequelize, DataTypes) {
             timestamps: false,
             underscored: true,
             indexes: [
-                { unique: true, fields: ["name"] },
                 { unique: true, fields: ["code"] },
                 { fields: ["is_active"] },
             ],

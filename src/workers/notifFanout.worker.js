@@ -75,6 +75,52 @@ function getMgmtUniqDate(payload) {
     );
 }
 
+function normalizeLeasingList(value) {
+    if (Array.isArray(value)) {
+        return value.map((x) => up(x)).filter(Boolean);
+    }
+
+    if (typeof value === "string") {
+        return value
+            .split(",")
+            .map((x) => up(x))
+            .filter(Boolean);
+    }
+
+    return [];
+}
+
+function getGroupLeasingFilter(meta = {}) {
+    const f = meta?.leasing_filter || meta?.leasingFilter || null;
+    if (!f) return null;
+
+    const mode = String(f.mode || f.type || "").trim().toLowerCase();
+    const leasingList = normalizeLeasingList(f.leasing || f.leasings || f.list);
+
+    if (!["only", "except"].includes(mode)) return null;
+    if (!leasingList.length) return null;
+
+    return {
+        mode,
+        leasingList,
+    };
+}
+
+function passesGroupLeasingFilter(groupMeta, leasingCode) {
+    const code = up(leasingCode);
+    if (!code) return true;
+
+    const filter = getGroupLeasingFilter(groupMeta);
+    if (!filter) return true;
+
+    const hit = filter.leasingList.includes(code);
+
+    if (filter.mode === "only") return hit;
+    if (filter.mode === "except") return !hit;
+
+    return true;
+}
+
 // ====== resolveTargetsForPayload(payload) ======
 async function resolveTargetsForPayload(payload) {
     const leasingCode = up(payload.leasing_code) || normalizeLeasingName(payload.leasing);
@@ -171,10 +217,16 @@ async function resolveTargetsForPayload(payload) {
                     notif_data_access_enabled: true,
                     is_bot_enabled: true,
                 },
-                attributes: ["id", "chat_id", "leasing_id", "pt_company_id"],
+                attributes: ["id", "chat_id", "leasing_id", "pt_company_id", "meta"],
             });
 
-            for (const g of groupsPt) targets.push({ group: g, reason: "pt" });
+            for (const g of groupsPt) {
+                if (!passesGroupLeasingFilter(g.meta || {}, leasingCode)) {
+                    continue;
+                }
+
+                targets.push({ group: g, reason: "pt" });
+            }
         }
     }
 
