@@ -98,17 +98,14 @@ export async function create(req, res) {
 
         const exists = await LinkedPT.findOne({
             where: {
-                [Op.or]: [
-                    { name: String(name).trim().toUpperCase() },
-                    { code: String(code).trim().toLowerCase() },
-                ],
+                code: String(code).trim().toLowerCase(),
             },
         });
 
         if (exists) {
             return res.status(409).json({
                 ok: false,
-                error: "Nama atau kode PT sudah digunakan",
+                error: "Kode PT sudah digunakan",
             });
         }
 
@@ -150,14 +147,14 @@ export async function update(req, res) {
         const conflict = await LinkedPT.findOne({
             where: {
                 id: { [Op.ne]: row.id },
-                [Op.or]: [{ name: nextName }, { code: nextCode }],
+                code: nextCode,
             },
         });
 
         if (conflict) {
             return res.status(409).json({
                 ok: false,
-                error: "Nama atau kode PT sudah digunakan",
+                error: "Kode PT sudah digunakan",
             });
         }
 

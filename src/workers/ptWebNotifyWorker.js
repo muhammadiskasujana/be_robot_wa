@@ -158,7 +158,7 @@ async function resolveLinkedPtTargets(payload = {}) {
 
     // ===== 1) FLOW LAMA: by payload.pt =====
     if (ptName) {
-        const directPt = await LinkedPT.findOne({
+        const directPts = await LinkedPT.findAll({
             where: {
                 name: ptName,
                 is_active: true,
@@ -166,15 +166,17 @@ async function resolveLinkedPtTargets(payload = {}) {
             attributes: ["id", "name", "code", "meta", "is_active"],
         });
 
-        if (directPt?.code) {
-            const key = low(directPt.code);
-            if (!seen.has(key)) {
-                seen.add(key);
-                targets.push({
-                    source: "payload.pt",
-                    linked: directPt,
-                });
-            }
+        for (const row of directPts) {
+            if (!row?.code) continue;
+
+            const key = low(row.code);
+            if (seen.has(key)) continue;
+
+            seen.add(key);
+            targets.push({
+                source: "payload.pt",
+                linked: row,
+            });
         }
     }
 
