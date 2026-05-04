@@ -3035,20 +3035,27 @@ export async function handleIncoming({ instance, webhook }) {
             return;
         }
 
-        group.meta = group.meta && typeof group.meta === "object" ? group.meta : {};
+        const currentMeta =
+            group.meta && typeof group.meta === "object" && !Array.isArray(group.meta)
+                ? { ...group.meta }
+                : {};
 
-        if (isPtMode) {
-            group.meta[filterKey] = {
+        const nextFilter = isPtMode
+            ? {
                 mode: filterMode,
                 leasing: filterList,
-            };
-        } else {
-            group.meta[filterKey] = {
+            }
+            : {
                 mode: filterMode,
                 pt: filterList,
             };
-        }
 
+        group.meta = {
+            ...currentMeta,
+            [filterKey]: nextFilter,
+        };
+
+        group.changed("meta", true);
         await group.save();
 
         await sendText({
@@ -3088,12 +3095,15 @@ export async function handleIncoming({ instance, webhook }) {
         const filterKey = isPtMode ? "leasing_filter" : "pt_filter";
         const targetLabel = isPtMode ? "leasing" : "PT";
 
-        group.meta = group.meta && typeof group.meta === "object" ? group.meta : {};
+        const currentMeta =
+            group.meta && typeof group.meta === "object" && !Array.isArray(group.meta)
+                ? { ...group.meta }
+                : {};
 
-        if (group.meta[filterKey]) {
-            delete group.meta[filterKey];
-        }
+        delete currentMeta[filterKey];
 
+        group.meta = currentMeta;
+        group.changed("meta", true);
         await group.save();
 
         await sendText({
