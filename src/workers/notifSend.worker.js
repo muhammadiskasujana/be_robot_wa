@@ -251,6 +251,11 @@
     //     return lines.join("\n");
     // }
 
+    function isPtKhusus(data = {}) {
+        const pt = up(pick(data, ["pt", "pt_name", "ptCompany", "pt_company"], ""));
+        return pt === "PT KHUSUS";
+    }
+
     function buildMessage(data, bill = null, opt = {}) {
         const lines = [];
 
@@ -276,6 +281,8 @@
         const alamat =
             pick(accessLoc, ["address", "formatted_address"], "") ||
             pick(data, ["accessAddr", "access_addr", "alamat", "address", "formatted_address"], "");
+
+        const hidePtIdentity = isPtKhusus(data);
 
         lines.push(`🚨 *HUNTER INFO* 🚨`);
         lines.push(`📌 🚗 *Data Kendaraan*`);
@@ -313,11 +320,13 @@
         // lines.push("");
         lines.push(`📌 📡 *Informasi Akses*`);
         lines.push(`  • User: *${userName} (${userHp})*`);
-        lines.push(`  • PT: *${ptName}*`);
 
+        if (!hidePtIdentity) {
+            lines.push(`  • PT: *${ptName}*`);
 
-        if (picPt || picPtHp) {
-            lines.push(`  • PIC PT: *${picPt || "-"} (${picPtHp || "-"})*`);
+            if (picPt || picPtHp) {
+                lines.push(`  • PIC PT: *${picPt || "-"} (${picPtHp || "-"})*`);
+            }
         }
 
         if (alamat) {
