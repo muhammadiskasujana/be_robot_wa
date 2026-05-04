@@ -121,6 +121,49 @@ function passesGroupLeasingFilter(groupMeta, leasingCode) {
     return true;
 }
 
+function normalizePtList(value) {
+    if (Array.isArray(value)) {
+        return value.map((x) => up(x)).filter(Boolean);
+    }
+
+    if (typeof value === "string") {
+        return value
+            .split(",")
+            .map((x) => up(x))
+            .filter(Boolean);
+    }
+
+    return [];
+}
+
+function getGroupPtFilter(meta = {}) {
+    const f = meta?.pt_filter || meta?.ptFilter || null;
+    if (!f) return null;
+
+    const mode = String(f.mode || f.type || "").trim().toLowerCase();
+    const ptList = normalizePtList(f.pt || f.pts || f.list);
+
+    if (!["only", "except"].includes(mode)) return null;
+    if (!ptList.length) return null;
+
+    return { mode, ptList };
+}
+
+function passesGroupPtFilter(groupMeta, ptName) {
+    const pt = up(ptName);
+    if (!pt) return true;
+
+    const filter = getGroupPtFilter(groupMeta);
+    if (!filter) return true;
+
+    const hit = filter.ptList.includes(pt);
+
+    if (filter.mode === "only") return hit;
+    if (filter.mode === "except") return !hit;
+
+    return true;
+}
+
 // ====== resolveTargetsForPayload(payload) ======
 async function resolveTargetsForPayload(payload) {
     const leasingCode = up(payload.leasing_code) || normalizeLeasingName(payload.leasing);
@@ -168,7 +211,7 @@ async function resolveTargetsForPayload(payload) {
                     notif_data_access_enabled: true,
                     is_bot_enabled: true,
                 },
-                attributes: ["id", "chat_id", "leasing_id", "pt_company_id", "leasing_level"],
+                attributes: ["id", "chat_id", "leasing_id", "pt_company_id", "leasing_level", "meta"],
             });
 
             if (groups.length) {
@@ -182,6 +225,11 @@ async function resolveTargetsForPayload(payload) {
                 });
 
                 for (const g of groups) {
+                    // filter PT untuk group mode leasing
+                    if (!passesGroupPtFilter(g.meta || {}, ptName)) {
+                        continue;
+                    }
+
                     const lvl = up(g.leasing_level);
 
                     if (lvl === "HO") {
