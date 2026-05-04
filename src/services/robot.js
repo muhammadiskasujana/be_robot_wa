@@ -2941,33 +2941,42 @@ export async function handleIncoming({ instance, webhook }) {
 
 
     // ✅ SET FILTER LEASING (only / except)
+    // ✅ SET FILTER
+// Mode PT      -> simpan leasing_filter
+// Mode leasing -> simpan pt_filter
     if (key === "set_filter_leasing") {
         if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
 
         const modeKey = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
-        if (modeKey !== "pt") {
+
+        const isPtMode = modeKey === "pt";
+        const isLeasingMode = modeKey === "leasing";
+
+        if (!isPtMode && !isLeasingMode) {
             await sendText({
                 ...ctx,
-                message: "❌ Command ini hanya untuk mode PT.\nGunakan: set mode pt",
+                message:
+                    "❌ Command ini hanya untuk mode PT atau mode leasing.\n" +
+                    "Gunakan: set mode pt atau set mode leasing",
             });
             return;
         }
 
-        // args[0] = "only" atau "except" atau langsung leasing list
-        // args[1] = leasing list (jika args[0] adalah mode)
+        const filterKey = isPtMode ? "leasing_filter" : "pt_filter";
+        const targetLabel = isPtMode ? "leasing" : "PT";
+
         let filterMode = "";
-        let leasingInput = "";
+        let filterInput = "";
 
         if (args.length >= 2 && ["only", "except"].includes(String(args[0] || "").toLowerCase())) {
             filterMode = String(args[0]).toLowerCase();
-            leasingInput = String(args[1] || "").trim();
+            filterInput = String(args[1] || "").trim();
         } else {
-            // fallback: coba ambil dari text
-            const fallbackText = String(text || "").trim().toLowerCase();
+            const fallbackText = String(text || "").trim();
             const match = fallbackText.match(/^set\s+filter\s+(only|except)\b/i);
             if (match) {
                 filterMode = match[1].toLowerCase();
-                leasingInput = fallbackText.replace(/^set\s+filter\s+(only|except)\b/i, "").trim();
+                filterInput = fallbackText.replace(/^set\s+filter\s+(only|except)\b/i, "").trim();
             }
         }
 
@@ -2977,10 +2986,13 @@ export async function handleIncoming({ instance, webhook }) {
                 message:
                     "❌ Format:\n" +
                     "set filter only BFI, ADIRA\n" +
-                    "atau:\n" +
-                    "set filter except MANDIRI\n" +
-                    "atau multiline:\n" +
-                    "set filter only\nBFI\nADIRA",
+                    "set filter except MANDIRI\n\n" +
+                    "Jika mode leasing, isi daftar PT:\n" +
+                    "set filter only PT LINTAS BORNEO SUKSES, PT KHUSUS\n\n" +
+                    "Multiline:\n" +
+                    "set filter only\n" +
+                    "BFI\n" +
+                    "ADIRA",
             });
             return;
         }
@@ -2995,71 +3007,91 @@ export async function handleIncoming({ instance, webhook }) {
             return;
         }
 
-        // parse leasing list dari leasingInput + multiline
-        let allLeasingTokens = [];
-        if (leasingInput) {
-            allLeasingTokens.push(leasingInput);
-        }
-        if (Array.isArray(argsLines) && argsLines.length) {
-            allLeasingTokens.push(...argsLines);
+        let allTokens = [];
+
+        if (filterInput) {
+            allTokens.push(filterInput);
         }
 
-        // flatten dan normalize
-        const leasingList = allLeasingTokens
+        if (Array.isArray(argsLines) && argsLines.length) {
+            allTokens.push(...argsLines);
+        }
+
+        const filterList = allTokens
             .flatMap((t) => String(t).split(","))
             .map((s) => s.trim().toUpperCase())
             .filter(Boolean)
-            .filter((v, idx, arr) => arr.indexOf(v) === idx); // unique
+            .filter((v, idx, arr) => arr.indexOf(v) === idx);
 
-        if (!leasingList.length) {
+        if (!filterList.length) {
             await sendText({
                 ...ctx,
                 message:
-                    "❌ Daftar leasing kosong.\n" +
-                    "Contoh: set filter only BFI, ADIRA, FIF",
+                    `❌ Daftar ${targetLabel} kosong.\n` +
+                    (isPtMode
+                        ? "Contoh: set filter only BFI, ADIRA, FIF"
+                        : "Contoh: set filter only PT LINTAS BORNEO SUKSES, PT KHUSUS"),
             });
             return;
         }
 
-        // set di meta group
         group.meta = group.meta && typeof group.meta === "object" ? group.meta : {};
-        group.meta.leasing_filter = {
-            mode: filterMode,
-            leasing: leasingList,
-        };
+
+        if (isPtMode) {
+            group.meta[filterKey] = {
+                mode: filterMode,
+                leasing: filterList,
+            };
+        } else {
+            group.meta[filterKey] = {
+                mode: filterMode,
+                pt: filterList,
+            };
+        }
 
         await group.save();
 
         await sendText({
             ...ctx,
             message:
-                `✅ Filter leasing diset: *${filterMode.toUpperCase()}*\n` +
-                `Daftar: ${leasingList.join(", ")}\n\n` +
+                `✅ Filter ${targetLabel} diset: *${filterMode.toUpperCase()}*\n` +
+                `Daftar: ${filterList.join(", ")}\n\n` +
                 (filterMode === "only"
-                    ? "📌 Group ini hanya akan menerima notif dari leasing: " + leasingList.join(", ")
-                    : "📌 Group ini akan menerima notif dari semua leasing KECUALI: " + leasingList.join(", ")),
+                    ? `📌 Group ini hanya akan menerima notif dari ${targetLabel}: ${filterList.join(", ")}`
+                    : `📌 Group ini akan menerima notif dari semua ${targetLabel} KECUALI: ${filterList.join(", ")}`),
         });
+
         return;
     }
 
-    // ✅ RESET FILTER LEASING
+// ✅ RESET FILTER
+// Mode PT      -> hapus leasing_filter
+// Mode leasing -> hapus pt_filter
     if (key === "reset_filter_leasing") {
         if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
 
         const modeKey = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
-        if (modeKey !== "pt") {
+
+        const isPtMode = modeKey === "pt";
+        const isLeasingMode = modeKey === "leasing";
+
+        if (!isPtMode && !isLeasingMode) {
             await sendText({
                 ...ctx,
-                message: "❌ Command ini hanya untuk mode PT.\nGunakan: set mode pt",
+                message:
+                    "❌ Command ini hanya untuk mode PT atau mode leasing.\n" +
+                    "Gunakan: set mode pt atau set mode leasing",
             });
             return;
         }
 
+        const filterKey = isPtMode ? "leasing_filter" : "pt_filter";
+        const targetLabel = isPtMode ? "leasing" : "PT";
+
         group.meta = group.meta && typeof group.meta === "object" ? group.meta : {};
 
-        // hapus filter
-        if (group.meta.leasing_filter) {
-            delete group.meta.leasing_filter;
+        if (group.meta[filterKey]) {
+            delete group.meta[filterKey];
         }
 
         await group.save();
@@ -3067,9 +3099,10 @@ export async function handleIncoming({ instance, webhook }) {
         await sendText({
             ...ctx,
             message:
-                "✅ Filter leasing berhasil dihapus.\n" +
-                "Group ini akan menerima notif dari semua leasing (tanpa filter).",
+                `✅ Filter ${targetLabel} berhasil dihapus.\n` +
+                `Group ini akan menerima notif dari semua ${targetLabel} (tanpa filter).`,
         });
+
         return;
     }
 
