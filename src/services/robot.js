@@ -717,7 +717,7 @@ export async function tryConfirmQuotedDeleteReason({
     const body = extractText(webhook);
     const t = normalizeText(body);
 
-    if (!/^[1-7]$/.test(t)) return false;
+    if (!/^\d+$/.test(t)) return false;
 
     // wajib reply/quote menu
     const quotedText = getQuotedText(webhook);
@@ -743,7 +743,7 @@ export async function tryConfirmQuotedDeleteReason({
 
     if (!looksLikeMenu) return false;
 
-    const reason = getDeleteReasonByNumber(t);
+    const reason = getDeleteReasonByNumber(Number(t));
     if (!reason) return false;
 
     const modeKey = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
