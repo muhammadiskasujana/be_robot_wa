@@ -38,7 +38,7 @@ export async function cekNopolFromApi(q) {
 
             const res = await axios.get(url, {
                 params: { input: query },
-                timeout: 20000,
+                timeout: 60000,
                 validateStatus: () => true,
             });
 
