@@ -21,7 +21,7 @@
     
     // ====== hardcode session list (mulai 2 dulu) ======
     const NOTIF_SESSIONS = [
-        "8bff18ec-0ece-41d4-9e94-0561b14662d2",
+        "5b5a0bab-e053-47fb-a4e6-6d56c209ce85",
         // "57ce8603-4114-4389-a886-dfade882bf63",
     ];
     
