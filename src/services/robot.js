@@ -1669,6 +1669,20 @@ export async function handleIncoming({ instance, webhook }) {
         return;
     }
 
+    if (key === "fitur-robot") {
+        await sendText({
+            ...ctx,
+            message:
+                "🤖 *FITUR ROBOT DIGITAL MANAGER*\n\n" +
+                "Untuk melihat seluruh fitur, command, notifikasi otomatis, " +
+                "cara penggunaan, dan contoh response WhatsApp, silakan buka link berikut:\n\n" +
+                "🔗 https://api.digitalmanager.id/api/robot/robot\n\n" +
+                "Halaman tersebut bersifat informatif dan dapat dibuka melalui browser.",
+        });
+
+        return;
+    }
+
     // on/off robot
     if (key === "robot_on") {
         if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;

@@ -408,6 +408,7 @@ export function parseCommandV2(text, opts = {})  {
 
     // help/ping optional
     if (first === "help") return { key: "help", args: [], argsLines: lines.slice(1) };
+    if (first === "fitur-robot") return { key: "fitur-robot", args: [], argsLines: lines.slice(1) };
     if (first === "ping") return { key: "ping", args: [], argsLines: lines.slice(1) };
 
     return { key: "", args: [], argsLines: [] };
