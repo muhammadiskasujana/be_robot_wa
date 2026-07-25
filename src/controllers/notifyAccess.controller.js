@@ -117,7 +117,7 @@ function validateBody(body) {
     };
 }
 
-const DEDUPE_TTL_SEC = 60 * 60; // 1 jam
+const DEDUPE_TTL_SEC = 6 * 60 * 60; // 1 jam
 
 function dedupeKey(leasing, nopol) {
     // leasing/nopol sudah uppercase dari validateBody

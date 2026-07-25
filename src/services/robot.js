@@ -3,6 +3,7 @@ import {
     WaMaster,
     WaGroup,
     WaGroupFeature,
+    WaGroupMatel,
     WaGroupMode,
     LeasingCompany,
     LeasingBranch,
@@ -74,6 +75,146 @@ const pendingRegister = new Map();
  * }
  */
 
+
+function normalizePhone62(value = "") {
+    let phone = String(value || "")
+        .replace(/[^\d]/g, "")
+        .trim();
+
+    if (!phone) return "";
+
+    if (phone.startsWith("0")) {
+        phone = `62${phone.slice(1)}`;
+    } else if (phone.startsWith("8")) {
+        phone = `62${phone}`;
+    }
+
+    return phone;
+}
+
+function isValidPhone62(value = "") {
+    return /^62\d{8,15}$/.test(
+        normalizePhone62(value)
+    );
+}
+
+async function requireKorlapMode(group) {
+    if (!group?.mode_id) {
+        return {
+            ok: false,
+            error:
+                "Group belum memiliki mode. " +
+                "Gunakan *set mode korlap* terlebih dahulu.",
+        };
+    }
+
+    const mode = await WaGroupMode.findByPk(
+        group.mode_id,
+        {
+            attributes: [
+                "id",
+                "key",
+                "is_active",
+            ],
+        }
+    );
+
+    if (!mode || !mode.is_active) {
+        return {
+            ok: false,
+            error: "Mode group tidak ditemukan atau tidak aktif.",
+        };
+    }
+
+    if (
+        String(mode.key || "")
+            .trim()
+            .toLowerCase() !== "korlap"
+    ) {
+        return {
+            ok: false,
+            error:
+                "Perintah ini hanya dapat digunakan " +
+                "pada group mode *korlap*.",
+        };
+    }
+
+    return {
+        ok: true,
+        mode,
+    };
+}
+
+function parseMatelItems(raw = "", argsLines = []) {
+    const inputParts = [];
+
+    const firstValue = String(raw || "").trim();
+
+    if (firstValue) {
+        inputParts.push(
+            ...firstValue
+                .split(",")
+                .map((x) => x.trim())
+                .filter(Boolean)
+        );
+    }
+
+    if (Array.isArray(argsLines)) {
+        for (const line of argsLines) {
+            const values = String(line || "")
+                .split(",")
+                .map((x) => x.trim())
+                .filter(Boolean);
+
+            inputParts.push(...values);
+        }
+    }
+
+    const items = [];
+    const invalid = [];
+
+    for (const value of inputParts) {
+        /*
+         * Format:
+         * nomor
+         * nomor nama matel
+         */
+        const parts = value
+            .split(/\s+/)
+            .filter(Boolean);
+
+        const rawPhone = parts.shift() || "";
+        const phoneE164 = normalizePhone62(rawPhone);
+        const matelName = parts.join(" ").trim();
+
+        if (!isValidPhone62(phoneE164)) {
+            invalid.push(value);
+            continue;
+        }
+
+        items.push({
+            phone_e164: phoneE164,
+            matel_name: matelName || null,
+        });
+    }
+
+    // Hindari nomor yang sama diproses berulang.
+    const seen = new Set();
+
+    const uniqueItems = items.filter((item) => {
+        if (seen.has(item.phone_e164)) {
+            return false;
+        }
+
+        seen.add(item.phone_e164);
+        return true;
+    });
+
+    return {
+        items: uniqueItems,
+        invalid,
+    };
+}
 
 function normCabang(v) {
     return String(v || "").trim().toUpperCase();
@@ -292,6 +433,242 @@ async function ensureModeManagement(group) {
 
     await group.save();
     return { ok: true, mode };
+}
+
+async function ensureModeKorlap(group) {
+    const mode = await WaGroupMode.findOne({
+        where: {
+            key: "korlap",
+            is_active: true,
+        },
+    });
+
+    if (!mode) {
+        return {
+            ok: false,
+            error: "Mode korlap belum ada di DB",
+        };
+    }
+
+    group.mode_id = mode.id;
+
+    // Mode korlap tidak terikat leasing atau PT.
+    group.leasing_id = null;
+    group.leasing_level = null;
+    group.leasing_branch_id = null;
+    group.pt_company_id = null;
+
+    await group.save();
+
+    return {
+        ok: true,
+        mode,
+    };
+}
+
+async function addMatelsForGroup(
+    group,
+    raw = "",
+    argsLines = [],
+    createdByPhone = null
+) {
+    const modeCheck = await requireKorlapMode(group);
+
+    if (!modeCheck.ok) {
+        return modeCheck;
+    }
+
+    const parsed = parseMatelItems(
+        raw,
+        argsLines
+    );
+
+    if (!parsed.items.length) {
+        return {
+            ok: false,
+            error:
+                parsed.invalid.length
+                    ? `Nomor tidak valid: ${parsed.invalid.join(", ")}`
+                    : "Nomor matel wajib diisi.",
+        };
+    }
+
+    const normalizedCreator =
+        normalizePhone62(createdByPhone);
+
+    const added = [];
+    const updated = [];
+    const skipped = [];
+
+    for (const item of parsed.items) {
+        const existing =
+            await WaGroupMatel.findOne({
+                where: {
+                    group_id: group.id,
+                    phone_e164:
+                    item.phone_e164,
+                },
+            });
+
+        if (!existing) {
+            const row =
+                await WaGroupMatel.create({
+                    group_id: group.id,
+                    phone_e164:
+                    item.phone_e164,
+                    matel_name:
+                    item.matel_name,
+                    is_active: true,
+                    created_by_phone:
+                        normalizedCreator ||
+                        null,
+                });
+
+            added.push(row);
+            continue;
+        }
+
+        const needsUpdate =
+            !existing.is_active ||
+            (
+                item.matel_name &&
+                item.matel_name !==
+                existing.matel_name
+            );
+
+        if (!needsUpdate) {
+            skipped.push(existing);
+            continue;
+        }
+
+        await existing.update({
+            is_active: true,
+            matel_name:
+                item.matel_name ||
+                existing.matel_name ||
+                null,
+            created_by_phone:
+                normalizedCreator ||
+                existing.created_by_phone ||
+                null,
+        });
+
+        updated.push(existing);
+    }
+
+    return {
+        ok: true,
+        added,
+        updated,
+        skipped,
+        invalid: parsed.invalid,
+        total:
+            added.length +
+            updated.length +
+            skipped.length,
+    };
+}
+
+async function removeMatelsForGroup(
+    group,
+    raw = "",
+    argsLines = []
+) {
+    const modeCheck = await requireKorlapMode(group);
+
+    if (!modeCheck.ok) {
+        return modeCheck;
+    }
+
+    const parsed = parseMatelItems(
+        raw,
+        argsLines
+    );
+
+    if (!parsed.items.length) {
+        return {
+            ok: false,
+            error:
+                parsed.invalid.length
+                    ? `Nomor tidak valid: ${parsed.invalid.join(", ")}`
+                    : "Nomor matel wajib diisi.",
+        };
+    }
+
+    const phones = parsed.items.map(
+        (item) => item.phone_e164
+    );
+
+    const rows = await WaGroupMatel.findAll({
+        where: {
+            group_id: group.id,
+            phone_e164: phones,
+            is_active: true,
+        },
+    });
+
+    if (!rows.length) {
+        return {
+            ok: false,
+            error:
+                "Nomor matel tidak ditemukan " +
+                "atau sudah tidak aktif.",
+        };
+    }
+
+    const foundPhones = new Set(
+        rows.map((row) => row.phone_e164)
+    );
+
+    const notFound = phones.filter(
+        (phone) => !foundPhones.has(phone)
+    );
+
+    await WaGroupMatel.update(
+        {
+            is_active: false,
+        },
+        {
+            where: {
+                id: rows.map((row) => row.id),
+            },
+        }
+    );
+
+    return {
+        ok: true,
+        deleted: rows.length,
+        phones: rows.map(
+            (row) => row.phone_e164
+        ),
+        not_found: notFound,
+        invalid: parsed.invalid,
+    };
+}
+
+async function listMatelsForGroup(group) {
+    const modeCheck = await requireKorlapMode(group);
+
+    if (!modeCheck.ok) {
+        return modeCheck;
+    }
+
+    const rows = await WaGroupMatel.findAll({
+        where: {
+            group_id: group.id,
+            is_active: true,
+        },
+        order: [
+            ["matel_name", "ASC"],
+            ["phone_e164", "ASC"],
+        ],
+    });
+
+    return {
+        ok: true,
+        matels: rows,
+        total: rows.length,
+    };
 }
 
 function normTargets(input = "") {
@@ -1811,6 +2188,30 @@ export async function handleIncoming({ instance, webhook }) {
             return;
         }
 
+        if (raw === "korlap") {
+            const r = await ensureModeKorlap(group);
+
+            if (!r.ok) {
+                await sendText({
+                    ...ctx,
+                    message: `❌ ${r.error}`,
+                });
+                return;
+            }
+
+            await sendText({
+                ...ctx,
+                message:
+                    "✅ Mode group diset: korlap\n\n" +
+                    "Grup ini akan menerima notifikasi " +
+                    "berdasarkan daftar matel yang ditambahkan.\n\n" +
+                    "Contoh:\n" +
+                    "*tambah matel 081234567890*",
+            });
+
+            return;
+        }
+
         // ✅ MODE MANAGEMENT
         if (raw === "management" || raw === "manage" || raw === "mgmt") {
             const r = await ensureModeManagement(group);
@@ -1830,6 +2231,7 @@ export async function handleIncoming({ instance, webhook }) {
                 "- set mode leasing\n" +
                 "- set mode input data\n" +
                 "- set mode pt\n" +
+                "- set mode korlap\n" +
                 "- set mode management\n" +
                 "- set mode gateway",
         });
@@ -2004,6 +2406,225 @@ export async function handleIncoming({ instance, webhook }) {
                 `Level: ${String(level).toUpperCase()}\n` +
                 `Cabang:\n${branchLines}`,
         });
+        return;
+    }
+
+    if (key === "add_matel") {
+        if (
+            !(
+                await requireMasterOrReply({
+                    master,
+                    ctx,
+                    sendText,
+                })
+            )
+        ) {
+            return;
+        }
+
+        /*
+         * Sesuaikan field sender dengan struktur ctx kamu.
+         * Bisa ctx.sender, ctx.senderPhone,
+         * ctx.from, atau webhook sender.
+         */
+        const createdByPhone =
+            ctx?.senderPhone ||
+            ctx?.sender ||
+            ctx?.from ||
+            "";
+
+        const r = await addMatelsForGroup(
+            group,
+            args[0] || "",
+            argsLines,
+            createdByPhone
+        );
+
+        if (!r.ok) {
+            await sendText({
+                ...ctx,
+                message:
+                    `❌ ${r.error}\n\n` +
+                    `Contoh:\n` +
+                    `- tambah matel 081234567890\n` +
+                    `- tambah matel 081234567890 Ahmad\n` +
+                    `- tambah matel 081234567890,081298765432\n` +
+                    `- tambah matel\n` +
+                    `  081234567890 Ahmad\n` +
+                    `  081298765432 Budi`,
+            });
+
+            return;
+        }
+
+        const lines = [];
+
+        lines.push("✅ Matel berhasil diproses.");
+        lines.push(`Ditambahkan: ${r.added.length}`);
+        lines.push(`Diaktifkan/diperbarui: ${r.updated.length}`);
+        lines.push(`Sudah terdaftar: ${r.skipped.length}`);
+
+        if (r.invalid.length) {
+            lines.push("");
+            lines.push(
+                `Nomor tidak valid: ${r.invalid.join(", ")}`
+            );
+        }
+
+        const activeItems = [
+            ...r.added,
+            ...r.updated,
+        ];
+
+        if (activeItems.length) {
+            lines.push("");
+            lines.push("*Matel aktif:*");
+
+            activeItems.forEach(
+                (item, index) => {
+                    const name = item.matel_name
+                        ? ` - ${item.matel_name}`
+                        : "";
+
+                    lines.push(
+                        `${index + 1}. ${item.phone_e164}${name}`
+                    );
+                }
+            );
+        }
+
+        await sendText({
+            ...ctx,
+            message: lines.join("\n"),
+        });
+
+        return;
+    }
+
+    if (key === "del_matel") {
+        if (
+            !(
+                await requireMasterOrReply({
+                    master,
+                    ctx,
+                    sendText,
+                })
+            )
+        ) {
+            return;
+        }
+
+        const r = await removeMatelsForGroup(
+            group,
+            args[0] || "",
+            argsLines
+        );
+
+        if (!r.ok) {
+            await sendText({
+                ...ctx,
+                message:
+                    `❌ ${r.error}\n\n` +
+                    `Contoh:\n` +
+                    `- hapus matel 081234567890\n` +
+                    `- hapus matel 081234567890,081298765432\n` +
+                    `- hapus matel\n` +
+                    `  081234567890\n` +
+                    `  081298765432`,
+            });
+
+            return;
+        }
+
+        const lines = [];
+
+        lines.push(
+            `✅ Matel dinonaktifkan: ${r.deleted} item.`
+        );
+
+        if (r.phones.length) {
+            lines.push("");
+            lines.push("*Nomor yang dihapus:*");
+
+            r.phones.forEach(
+                (phone, index) => {
+                    lines.push(
+                        `${index + 1}. ${phone}`
+                    );
+                }
+            );
+        }
+
+        if (r.not_found.length) {
+            lines.push("");
+            lines.push(
+                `Tidak ditemukan: ${r.not_found.join(", ")}`
+            );
+        }
+
+        if (r.invalid.length) {
+            lines.push("");
+            lines.push(
+                `Nomor tidak valid: ${r.invalid.join(", ")}`
+            );
+        }
+
+        await sendText({
+            ...ctx,
+            message: lines.join("\n"),
+        });
+
+        return;
+    }
+
+    if (key === "list_matel") {
+        const r = await listMatelsForGroup(
+            group
+        );
+
+        if (!r.ok) {
+            await sendText({
+                ...ctx,
+                message: `❌ ${r.error}`,
+            });
+
+            return;
+        }
+
+        if (!r.matels.length) {
+            await sendText({
+                ...ctx,
+                message:
+                    "📌 *Daftar Matel Korlap*\n\n" +
+                    "Belum ada matel aktif di grup ini.\n\n" +
+                    "Gunakan:\n" +
+                    "*tambah matel 081234567890*",
+            });
+
+            return;
+        }
+
+        const matelLines = r.matels
+            .map((item, index) => {
+                const name = item.matel_name
+                    ? ` - ${item.matel_name}`
+                    : "";
+
+                return (
+                    `${index + 1}. ` +
+                    `${item.phone_e164}${name}`
+                );
+            })
+            .join("\n");
+
+        await sendText({
+            ...ctx,
+            message:
+                `📌 *Daftar Matel Korlap*\n\n` +
+                `${matelLines}\n\n` +
+                `Total: *${r.total} matel*`,
+        });
+
         return;
     }
 

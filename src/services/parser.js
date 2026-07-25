@@ -148,6 +148,38 @@ export function parseCommandV2(text, opts = {})  {
         return { key: "list_branch", args: [], argsLines: lines.slice(1) };
     }
 
+    // tambah matel ...
+// Bisa di baris pertama atau multiline.
+    if (
+        first === "tambah matel" ||
+        first.startsWith("tambah matel ")
+    ) {
+        const after = first
+            .replace(/^tambah matel\s*/i, "")
+            .trim();
+
+        return {
+            key: "add_matel",
+            args: after ? [after] : [],
+            argsLines: lines.slice(1),
+        };
+    }
+
+    if (
+        first === "hapus matel" ||
+        first.startsWith("hapus matel ")
+    ) {
+        const after = first
+            .replace(/^hapus matel\s*/i, "")
+            .trim();
+
+        return {
+            key: "del_matel",
+            args: after ? [after] : [],
+            argsLines: lines.slice(1),
+        };
+    }
+
     if ((first === "input data motor" || first === "input data r2") && lines.length === 1) {
         return { key: "input_data_r2", args: [], argsLines: [] };
     }

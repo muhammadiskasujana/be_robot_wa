@@ -5,6 +5,7 @@ import { Op } from "sequelize";
 import {
     WaGroup,
     WaGroupMode,
+    WaGroupMatel,
     LeasingCompany,
     LeasingBranch,
     WaGroupLeasingBranch,
@@ -13,77 +14,174 @@ import {
 
 import { notifySendQueue } from "../queues/notifySendQueue.js";
 
-console.log("[NOTIF_FANOUT] boot", { pid: process.pid, REDIS_URL: process.env.REDIS_URL });
+console.log("[NOTIF_FANOUT] boot", {
+    pid: process.pid,
+    REDIS_URL: process.env.REDIS_URL,
+});
 
 const redisConnection = {
-    url: process.env.REDIS_URL || "redis://127.0.0.1:6380",
+    url:
+        process.env.REDIS_URL ||
+        "redis://127.0.0.1:6380",
+
     maxRetriesPerRequest: null,
     enableReadyCheck: false,
 };
 
-// ============ helpers ============
-function up(v) {
-    return String(v || "").trim().toUpperCase();
+// ======================================================
+// Helpers
+// ======================================================
+
+function up(value) {
+    return String(value || "")
+        .trim()
+        .toUpperCase();
 }
 
-// ===== target parsing (management) =====
-// manage_target format: "AKTIVASI,HAPUS_AKUN"
-function parseTargets(s) {
-    return String(s || "")
-        .split(",")
-        .map((x) => x.trim().toUpperCase())
-        .filter(Boolean);
-}
-function hasTarget(groupManageTarget, want) {
-    const w = up(want);
-    if (!w) return false;
-    const set = new Set(parseTargets(groupManageTarget));
-    return set.has(w);
-}
+function normalizePhone62(value = "") {
+    let phone = String(value || "")
+        .replace(/[^\d]/g, "")
+        .trim();
 
-// leasing name normalizer
-function normalizeLeasingName(raw) {
-    const s = String(raw || "").trim();
-    if (!s) return "";
+    if (!phone) return "";
 
-    const cleaned = s.replace(/\s+/g, " ").toUpperCase();
-    const parts = cleaned.split(" ").filter(Boolean);
-    if (!parts.length) return "";
+    if (phone.startsWith("0")) {
+        phone = `62${phone.slice(1)}`;
+    } else if (phone.startsWith("8")) {
+        phone = `62${phone}`;
+    }
 
-    const p1 = (parts[0] || "").replace(/[^A-Z0-9-]/g, "");
-    const p2 = (parts[1] || "").replace(/[^A-Z0-9-]/g, "");
-
-    const isP2Numeric = p2 && /^[0-9]+$/.test(p2);
-    const name = p2 && !isP2Numeric ? `${p1}-${p2}` : p1;
-
-    return name.replace(/-+/g, "-");
+    return phone;
 }
 
-// ===== helper untuk management event key =====
-function getMgmtEventKey(payload) {
-    // kalau payload akses (ada nopol), jangan dianggap management walau ada field "type"
-    if (payload?.nopol) return "";
-
-    return up(payload?.event_key || payload?.event_type || payload?.type);
-}
-
-function getMgmtUniqDate(payload) {
-    // pakai tanggal umum bila ada
-    return (
-        String(payload?.tanggal || payload?.tanggal_aktivasi || payload?.tanggal_registrasi || "").trim() ||
+/**
+ * Nomor matel/pengakses.
+ *
+ * Sebaiknya controller pengirim payload memakai:
+ * payload.matel_phone
+ *
+ * Field lain dipertahankan sebagai fallback.
+ */
+function getMatelPhone(payload = {}) {
+    return normalizePhone62(
+        payload.matel_phone ||
+        payload.matelPhone ||
+        payload.no_hp ||
+        payload.hp ||
+        payload.phone ||
+        payload.user_phone ||
+        payload.userPhone ||
         ""
     );
 }
 
+// ======================================================
+// Target parsing management
+// ======================================================
+
+// manage_target contoh:
+// "AKTIVASI,HAPUS_AKUN"
+function parseTargets(value) {
+    return String(value || "")
+        .split(",")
+        .map((item) =>
+            item.trim().toUpperCase()
+        )
+        .filter(Boolean);
+}
+
+function hasTarget(groupManageTarget, wanted) {
+    const target = up(wanted);
+
+    if (!target) return false;
+
+    const targets = new Set(
+        parseTargets(groupManageTarget)
+    );
+
+    return targets.has(target);
+}
+
+// ======================================================
+// Leasing helpers
+// ======================================================
+
+function normalizeLeasingName(raw) {
+    const input = String(raw || "").trim();
+
+    if (!input) return "";
+
+    const cleaned = input
+        .replace(/\s+/g, " ")
+        .toUpperCase();
+
+    const parts = cleaned
+        .split(" ")
+        .filter(Boolean);
+
+    if (!parts.length) return "";
+
+    const first = String(parts[0] || "")
+        .replace(/[^A-Z0-9-]/g, "");
+
+    const second = String(parts[1] || "")
+        .replace(/[^A-Z0-9-]/g, "");
+
+    const secondIsNumeric =
+        second &&
+        /^[0-9]+$/.test(second);
+
+    const name =
+        second && !secondIsNumeric
+            ? `${first}-${second}`
+            : first;
+
+    return name.replace(/-+/g, "-");
+}
+
+// ======================================================
+// Management helpers
+// ======================================================
+
+function getMgmtEventKey(payload = {}) {
+    /*
+     * Payload akses memiliki nopol.
+     * Jangan dianggap sebagai event management,
+     * walaupun payload memiliki field type.
+     */
+    if (payload.nopol) return "";
+
+    return up(
+        payload.event_key ||
+        payload.event_type ||
+        payload.type
+    );
+}
+
+function getMgmtUniqDate(payload = {}) {
+    return String(
+        payload.tanggal ||
+        payload.tanggal_aktivasi ||
+        payload.tanggal_registrasi ||
+        ""
+    ).trim();
+}
+
+// ======================================================
+// Leasing filter untuk group PT
+// ======================================================
+
 function normalizeLeasingList(value) {
     if (Array.isArray(value)) {
-        return value.map((x) => up(x)).filter(Boolean);
+        return value
+            .map((item) => up(item))
+            .filter(Boolean);
     }
 
     if (typeof value === "string") {
         return value
             .split(",")
-            .map((x) => up(x))
+            .map((item) => up(item))
             .filter(Boolean);
     }
 
@@ -91,14 +189,37 @@ function normalizeLeasingList(value) {
 }
 
 function getGroupLeasingFilter(meta = {}) {
-    const f = meta?.leasing_filter || meta?.leasingFilter || null;
-    if (!f) return null;
+    const filter =
+        meta?.leasing_filter ||
+        meta?.leasingFilter ||
+        null;
 
-    const mode = String(f.mode || f.type || "").trim().toLowerCase();
-    const leasingList = normalizeLeasingList(f.leasing || f.leasings || f.list);
+    if (!filter) return null;
 
-    if (!["only", "except"].includes(mode)) return null;
-    if (!leasingList.length) return null;
+    const mode = String(
+        filter.mode ||
+        filter.type ||
+        ""
+    )
+        .trim()
+        .toLowerCase();
+
+    const leasingList =
+        normalizeLeasingList(
+            filter.leasing ||
+            filter.leasings ||
+            filter.list
+        );
+
+    if (
+        !["only", "except"].includes(mode)
+    ) {
+        return null;
+    }
+
+    if (!leasingList.length) {
+        return null;
+    }
 
     return {
         mode,
@@ -106,30 +227,48 @@ function getGroupLeasingFilter(meta = {}) {
     };
 }
 
-function passesGroupLeasingFilter(groupMeta, leasingCode) {
+function passesGroupLeasingFilter(
+    groupMeta,
+    leasingCode
+) {
     const code = up(leasingCode);
+
     if (!code) return true;
 
-    const filter = getGroupLeasingFilter(groupMeta);
+    const filter =
+        getGroupLeasingFilter(groupMeta);
+
     if (!filter) return true;
 
-    const hit = filter.leasingList.includes(code);
+    const matched =
+        filter.leasingList.includes(code);
 
-    if (filter.mode === "only") return hit;
-    if (filter.mode === "except") return !hit;
+    if (filter.mode === "only") {
+        return matched;
+    }
+
+    if (filter.mode === "except") {
+        return !matched;
+    }
 
     return true;
 }
 
+// ======================================================
+// PT filter untuk group leasing
+// ======================================================
+
 function normalizePtList(value) {
     if (Array.isArray(value)) {
-        return value.map((x) => up(x)).filter(Boolean);
+        return value
+            .map((item) => up(item))
+            .filter(Boolean);
     }
 
     if (typeof value === "string") {
         return value
             .split(",")
-            .map((x) => up(x))
+            .map((item) => up(item))
             .filter(Boolean);
     }
 
@@ -137,222 +276,827 @@ function normalizePtList(value) {
 }
 
 function getGroupPtFilter(meta = {}) {
-    const f = meta?.pt_filter || meta?.ptFilter || null;
-    if (!f) return null;
+    const filter =
+        meta?.pt_filter ||
+        meta?.ptFilter ||
+        null;
 
-    const mode = String(f.mode || f.type || "").trim().toLowerCase();
-    const ptList = normalizePtList(f.pt || f.pts || f.list);
+    if (!filter) return null;
 
-    if (!["only", "except"].includes(mode)) return null;
-    if (!ptList.length) return null;
+    const mode = String(
+        filter.mode ||
+        filter.type ||
+        ""
+    )
+        .trim()
+        .toLowerCase();
 
-    return { mode, ptList };
+    const ptList =
+        normalizePtList(
+            filter.pt ||
+            filter.pts ||
+            filter.list
+        );
+
+    if (
+        !["only", "except"].includes(mode)
+    ) {
+        return null;
+    }
+
+    if (!ptList.length) {
+        return null;
+    }
+
+    return {
+        mode,
+        ptList,
+    };
 }
 
-function passesGroupPtFilter(groupMeta, ptName) {
+function passesGroupPtFilter(
+    groupMeta,
+    ptName
+) {
     const pt = up(ptName);
+
     if (!pt) return true;
 
-    const filter = getGroupPtFilter(groupMeta);
+    const filter =
+        getGroupPtFilter(groupMeta);
+
     if (!filter) return true;
 
-    const hit = filter.ptList.includes(pt);
+    const matched =
+        filter.ptList.includes(pt);
 
-    if (filter.mode === "only") return hit;
-    if (filter.mode === "except") return !hit;
+    if (filter.mode === "only") {
+        return matched;
+    }
+
+    if (filter.mode === "except") {
+        return !matched;
+    }
 
     return true;
 }
 
-// ====== resolveTargetsForPayload(payload) ======
-async function resolveTargetsForPayload(payload) {
-    const leasingCode = up(payload.leasing_code) || normalizeLeasingName(payload.leasing);
-    const cabangName = up(payload.cabang);
-    const ptName = up(payload.pt);
+// ======================================================
+// Resolve targets
+// ======================================================
 
-    const wantEventKey = getMgmtEventKey(payload);
+async function resolveTargetsForPayload(
+    payload = {}
+) {
+    const leasingCode =
+        up(payload.leasing_code) ||
+        normalizeLeasingName(
+            payload.leasing
+        );
 
-    const [modeLeasing, modePt, modeMgmt] = await Promise.all([
-        WaGroupMode.findOne({ where: { key: "leasing", is_active: true }, attributes: ["id"] }),
-        WaGroupMode.findOne({ where: { key: "pt", is_active: true }, attributes: ["id"] }),
-        WaGroupMode.findOne({ where: { key: "management", is_active: true }, attributes: ["id"] }),
+    const branchName = up(
+        payload.cabang
+    );
+
+    const ptName = up(
+        payload.pt
+    );
+
+    const matelPhone =
+        getMatelPhone(payload);
+
+    const managementEventKey =
+        getMgmtEventKey(payload);
+
+    const [
+        modeLeasing,
+        modePt,
+        modeManagement,
+        modeKorlap,
+    ] = await Promise.all([
+        WaGroupMode.findOne({
+            where: {
+                key: "leasing",
+                is_active: true,
+            },
+            attributes: ["id"],
+        }),
+
+        WaGroupMode.findOne({
+            where: {
+                key: "pt",
+                is_active: true,
+            },
+            attributes: ["id"],
+        }),
+
+        WaGroupMode.findOne({
+            where: {
+                key: "management",
+                is_active: true,
+            },
+            attributes: ["id"],
+        }),
+
+        WaGroupMode.findOne({
+            where: {
+                key: "korlap",
+                is_active: true,
+            },
+            attributes: ["id"],
+        }),
     ]);
 
     const targets = [];
 
-    // ------- MANAGEMENT mode ONLY -------
-    if (modeMgmt?.id && wantEventKey) {
-        const groupsMgmt = await WaGroup.findAll({
-            where: {
-                mode_id: modeMgmt.id,
-                notif_data_access_enabled: true,
-                is_bot_enabled: true,
-            },
-            attributes: ["id", "chat_id", "mode_id", "manage_target", "leasing_id", "pt_company_id"],
-        });
+    // ==================================================
+    // MANAGEMENT MODE ONLY
+    // ==================================================
 
-        for (const g of groupsMgmt) {
-            if (!hasTarget(g.manage_target, wantEventKey)) continue;
-            targets.push({ group: g, reason: `management:${wantEventKey}` });
+    if (
+        modeManagement?.id &&
+        managementEventKey
+    ) {
+        const managementGroups =
+            await WaGroup.findAll({
+                where: {
+                    mode_id:
+                    modeManagement.id,
+
+                    notif_data_access_enabled:
+                        true,
+
+                    is_bot_enabled:
+                        true,
+                },
+
+                attributes: [
+                    "id",
+                    "chat_id",
+                    "mode_id",
+                    "manage_target",
+                    "leasing_id",
+                    "pt_company_id",
+                ],
+            });
+
+        for (
+            const group
+            of managementGroups
+            ) {
+            if (
+                !hasTarget(
+                    group.manage_target,
+                    managementEventKey
+                )
+            ) {
+                continue;
+            }
+
+            targets.push({
+                group,
+                reason:
+                    `management:${managementEventKey}`,
+            });
         }
 
-        // penting: management event berhenti di sini
+        /*
+         * Event management tidak diteruskan
+         * ke leasing, PT, atau korlap.
+         */
         return targets;
     }
 
-    // ------- LEASING mode -------
-    if (modeLeasing?.id && leasingCode) {
-        const leasing = await LeasingCompany.findOne({ where: { code: leasingCode, is_active: true } });
-        if (leasing) {
-            const groups = await WaGroup.findAll({
+    // ==================================================
+    // LEASING MODE
+    // ==================================================
+
+    if (
+        modeLeasing?.id &&
+        leasingCode
+    ) {
+        const leasing =
+            await LeasingCompany.findOne({
                 where: {
-                    mode_id: modeLeasing.id,
-                    leasing_id: leasing.id,
-                    notif_data_access_enabled: true,
-                    is_bot_enabled: true,
+                    code: leasingCode,
+                    is_active: true,
                 },
-                attributes: ["id", "chat_id", "leasing_id", "pt_company_id", "leasing_level", "meta"],
+                attributes: [
+                    "id",
+                    "code",
+                ],
             });
 
-            if (groups.length) {
-                const branch = await LeasingBranch.findOne({
+        if (leasing) {
+            const groups =
+                await WaGroup.findAll({
                     where: {
-                        leasing_id: leasing.id,
-                        is_active: true,
-                        [Op.or]: [{ name: cabangName }, { code: cabangName }],
+                        mode_id:
+                        modeLeasing.id,
+
+                        leasing_id:
+                        leasing.id,
+
+                        notif_data_access_enabled:
+                            true,
+
+                        is_bot_enabled:
+                            true,
                     },
-                    attributes: ["id", "name", "code"],
+
+                    attributes: [
+                        "id",
+                        "chat_id",
+                        "leasing_id",
+                        "pt_company_id",
+                        "leasing_level",
+                        "meta",
+                    ],
                 });
 
-                for (const g of groups) {
-                    // filter PT untuk group mode leasing
-                    if (!passesGroupPtFilter(g.meta || {}, ptName)) {
-                        continue;
-                    }
+            let branch = null;
 
-                    const lvl = up(g.leasing_level);
+            /*
+             * Branch hanya dicari jika
+             * ada grup leasing.
+             */
+            if (
+                groups.length &&
+                branchName
+            ) {
+                branch =
+                    await LeasingBranch.findOne({
+                        where: {
+                            leasing_id:
+                            leasing.id,
 
-                    if (lvl === "HO") {
-                        targets.push({ group: g, reason: "leasing:HO" });
-                        continue;
-                    }
+                            is_active:
+                                true,
 
-                    if (!branch?.id) continue;
+                            [Op.or]: [
+                                {
+                                    name:
+                                    branchName,
+                                },
+                                {
+                                    code:
+                                    branchName,
+                                },
+                            ],
+                        },
 
-                    const allowed = await WaGroupLeasingBranch.findOne({
-                        where: { group_id: g.id, leasing_branch_id: branch.id, is_active: true },
-                        attributes: ["id"],
+                        attributes: [
+                            "id",
+                            "name",
+                            "code",
+                        ],
                     });
-
-                    if (allowed) targets.push({ group: g, reason: `leasing:${lvl}` });
-                }
             }
-        }
-    }
 
-    // ------- PT mode -------
-    if (modePt?.id && ptName) {
-        const pt = await PtCompany.findOne({
-            where: { is_active: true, [Op.or]: [{ code: ptName }, { name: ptName }] },
-            attributes: ["id"],
-        });
-
-        if (pt) {
-            const groupsPt = await WaGroup.findAll({
-                where: {
-                    mode_id: modePt.id,
-                    pt_company_id: pt.id,
-                    notif_data_access_enabled: true,
-                    is_bot_enabled: true,
-                },
-                attributes: ["id", "chat_id", "leasing_id", "pt_company_id", "meta"],
-            });
-
-            for (const g of groupsPt) {
-                if (!passesGroupLeasingFilter(g.meta || {}, leasingCode)) {
+            for (const group of groups) {
+                /*
+                 * Filter PT opsional pada
+                 * grup mode leasing.
+                 */
+                if (
+                    !passesGroupPtFilter(
+                        group.meta || {},
+                        ptName
+                    )
+                ) {
                     continue;
                 }
 
-                targets.push({ group: g, reason: "pt" });
+                const level = up(
+                    group.leasing_level
+                );
+
+                if (level === "HO") {
+                    targets.push({
+                        group,
+                        reason:
+                            "leasing:HO",
+                    });
+
+                    continue;
+                }
+
+                if (!branch?.id) {
+                    continue;
+                }
+
+                const allowed =
+                    await WaGroupLeasingBranch.findOne(
+                        {
+                            where: {
+                                group_id:
+                                group.id,
+
+                                leasing_branch_id:
+                                branch.id,
+
+                                is_active:
+                                    true,
+                            },
+
+                            attributes: [
+                                "id",
+                            ],
+                        }
+                    );
+
+                if (allowed) {
+                    targets.push({
+                        group,
+                        reason:
+                            `leasing:${level}`,
+                    });
+                }
             }
         }
     }
 
+    // ==================================================
+    // PT MODE
+    // ==================================================
+
+    if (
+        modePt?.id &&
+        ptName
+    ) {
+        const pt =
+            await PtCompany.findOne({
+                where: {
+                    is_active: true,
+
+                    [Op.or]: [
+                        {
+                            code:
+                            ptName,
+                        },
+                        {
+                            name:
+                            ptName,
+                        },
+                    ],
+                },
+
+                attributes: [
+                    "id",
+                ],
+            });
+
+        if (pt) {
+            const ptGroups =
+                await WaGroup.findAll({
+                    where: {
+                        mode_id:
+                        modePt.id,
+
+                        pt_company_id:
+                        pt.id,
+
+                        notif_data_access_enabled:
+                            true,
+
+                        is_bot_enabled:
+                            true,
+                    },
+
+                    attributes: [
+                        "id",
+                        "chat_id",
+                        "leasing_id",
+                        "pt_company_id",
+                        "meta",
+                    ],
+                });
+
+            for (
+                const group
+                of ptGroups
+                ) {
+                /*
+                 * Filter leasing opsional
+                 * pada group mode PT.
+                 */
+                if (
+                    !passesGroupLeasingFilter(
+                        group.meta || {},
+                        leasingCode
+                    )
+                ) {
+                    continue;
+                }
+
+                targets.push({
+                    group,
+                    reason: "pt",
+                });
+            }
+        }
+    }
+
+    // ==================================================
+    // KORLAP MODE
+    // ==================================================
+    /*
+     * Mode korlap tidak terikat leasing.
+     *
+     * Grup menerima notifikasi ketika
+     * nomor pengakses/matel terdaftar
+     * pada wa_group_matels.
+     */
+
+    if (
+        modeKorlap?.id &&
+        matelPhone
+    ) {
+        /*
+         * Query pivot terlebih dahulu.
+         * Cara ini tidak bergantung pada
+         * association include Sequelize.
+         */
+        const assignments =
+            await WaGroupMatel.findAll({
+                where: {
+                    phone_e164:
+                    matelPhone,
+
+                    is_active:
+                        true,
+                },
+
+                attributes: [
+                    "group_id",
+                ],
+
+                raw: true,
+            });
+
+        const groupIds = [
+            ...new Set(
+                assignments
+                    .map(
+                        (item) =>
+                            item.group_id
+                    )
+                    .filter(Boolean)
+            ),
+        ];
+
+        if (groupIds.length) {
+            const korlapGroups =
+                await WaGroup.findAll({
+                    where: {
+                        id: {
+                            [Op.in]:
+                            groupIds,
+                        },
+
+                        mode_id:
+                        modeKorlap.id,
+
+                        notif_data_access_enabled:
+                            true,
+
+                        is_bot_enabled:
+                            true,
+                    },
+
+                    attributes: [
+                        "id",
+                        "chat_id",
+                        "leasing_id",
+                        "pt_company_id",
+                    ],
+                });
+
+            for (
+                const group
+                of korlapGroups
+                ) {
+                targets.push({
+                    group,
+                    reason:
+                        `korlap:matel:${matelPhone}`,
+                });
+            }
+        }
+    }
+
+    // ==================================================
+    // Deduplicate targets
+    // ==================================================
+
     const seen = new Set();
-    return targets.filter((t) => {
-        if (seen.has(t.group.id)) return false;
-        seen.add(t.group.id);
-        return true;
-    });
+
+    return targets.filter(
+        (target) => {
+            const groupId =
+                target.group?.id;
+
+            if (!groupId) {
+                return false;
+            }
+
+            if (
+                seen.has(groupId)
+            ) {
+                return false;
+            }
+
+            seen.add(groupId);
+
+            return true;
+        }
+    );
 }
 
-// ============ Worker: FANOUT ============
+// ======================================================
+// Worker FANOUT
+// ======================================================
+
 export const worker = new Worker(
     "wa_notify",
+
     async (job) => {
-        console.log("[NOTIF_FANOUT] processing", job.id, job.name);
+        console.log(
+            "[NOTIF_FANOUT] processing",
+            job.id,
+            job.name
+        );
 
-        const payload = job.data || {};
-        const targets = await resolveTargetsForPayload(payload);
+        const payload =
+            job.data || {};
 
-        if (!targets.length) return { ok: true, fanout: 0, note: "no targets" };
+        const targets =
+            await resolveTargetsForPayload(
+                payload
+            );
 
-        // ✅ generic management detect:
-        const wantEventKey = getMgmtEventKey(payload);
-
-// management hanya kalau:
-// - event_key ada (setelah filter nopol), ATAU
-// - job.name memang mgmt dari controller lama
-        const isMgmt = Boolean(wantEventKey) || job.name === "notify_management" || String(job.name || "").startsWith("notify_management_");
-        const bulk = targets.map((t) => {
-            const g = t.group;
-            const mgmtKey = up(wantEventKey || payload?.event_key || payload?.event_type || payload?.type || "MGMT");
-            // deterministic uniq (include event_key if management)
-            const uniq = isMgmt
-                ?  `mgmt|${mgmtKey}|${payload.no_hp_user || payload.hp_user || ""}|${getMgmtUniqDate(payload)}|${g.id}`
-                : (() => {
-                    const leasingKey =
-                        up(payload.leasing_code) ||
-                        normalizeLeasingName(payload.leasing) ||
-                        up(payload.leasing).split(" ")[0];
-                    return `${leasingKey}|${payload.nopol}|${g.id}|${payload.accessDate || ""}`;
-                })();
-
+        if (!targets.length) {
             return {
-                // ✅ send job name:
-                name: isMgmt ? "management_event_send" : "notify_access_group",
-                data: {
-                    payload,
-                    group: {
-                        id: g.id,
-                        chat_id: g.chat_id,
-                        leasing_id: g.leasing_id || null,
-                        pt_company_id: g.pt_company_id || null,
-                    },
-                    reason: t.reason,
-                    parent_job_id: job.id,
-                },
-                opts: {
-                    jobId: "send_" + Buffer.from(uniq).toString("base64url").slice(0, 80),
-                    removeOnComplete: { count: 30000 },
-                    removeOnFail: { count: 20000 },
-                    attempts: 5,
-                    backoff: { type: "exponential", delay: 1000 },
-                },
+                ok: true,
+                fanout: 0,
+                note: "no targets",
+                matel_phone:
+                    getMatelPhone(
+                        payload
+                    ) || null,
             };
-        });
+        }
 
-        await notifySendQueue.addBulk(bulk);
+        const managementEventKey =
+            getMgmtEventKey(payload);
 
-        console.log("[NOTIF_FANOUT] job", job.id, "fanout =", bulk.length);
-        return { ok: true, fanout: bulk.length, isMgmt, event_key: wantEventKey || null };
+        /*
+         * Management jika:
+         * - payload memiliki event management; atau
+         * - job lama memakai nama notify_management.
+         */
+        const isManagement =
+            Boolean(
+                managementEventKey
+            ) ||
+            job.name ===
+            "notify_management" ||
+            String(
+                job.name || ""
+            ).startsWith(
+                "notify_management_"
+            );
+
+        const matelPhone =
+            getMatelPhone(payload);
+
+        const bulk = targets.map(
+            (target) => {
+                const group =
+                    target.group;
+
+                const managementKey =
+                    up(
+                        managementEventKey ||
+                        payload.event_key ||
+                        payload.event_type ||
+                        payload.type ||
+                        "MGMT"
+                    );
+
+                /*
+                 * Deterministic unique key.
+                 */
+                const uniqueKey =
+                    isManagement
+                        ? [
+                            "mgmt",
+                            managementKey,
+                            normalizePhone62(
+                                payload.no_hp_user ||
+                                payload.hp_user ||
+                                ""
+                            ),
+                            getMgmtUniqDate(
+                                payload
+                            ),
+                            group.id,
+                        ].join("|")
+                        : (() => {
+                            const leasingKey =
+                                up(
+                                    payload.leasing_code
+                                ) ||
+                                normalizeLeasingName(
+                                    payload.leasing
+                                ) ||
+                                up(
+                                    payload.leasing
+                                ).split(
+                                    " "
+                                )[0] ||
+                                "NO_LEASING";
+
+                            return [
+                                "access",
+                                leasingKey,
+                                payload.nopol ||
+                                "",
+                                matelPhone ||
+                                "",
+                                group.id,
+                                payload.accessDate ||
+                                payload.waktu_akses ||
+                                payload.access_at ||
+                                "",
+                            ].join("|");
+                        })();
+
+                return {
+                    name:
+                        isManagement
+                            ? "management_event_send"
+                            : "notify_access_group",
+
+                    data: {
+                        payload,
+
+                        group: {
+                            id:
+                            group.id,
+
+                            chat_id:
+                            group.chat_id,
+
+                            leasing_id:
+                                group.leasing_id ||
+                                null,
+
+                            pt_company_id:
+                                group.pt_company_id ||
+                                null,
+                        },
+
+                        reason:
+                        target.reason,
+
+                        parent_job_id:
+                        job.id,
+                    },
+
+                    opts: {
+                        jobId:
+                            "send_" +
+                            Buffer.from(
+                                uniqueKey
+                            )
+                                .toString(
+                                    "base64url"
+                                )
+                                .slice(
+                                    0,
+                                    100
+                                ),
+
+                        removeOnComplete: {
+                            count: 30000,
+                        },
+
+                        removeOnFail: {
+                            count: 20000,
+                        },
+
+                        attempts: 5,
+
+                        backoff: {
+                            type:
+                                "exponential",
+
+                            delay: 1000,
+                        },
+                    },
+                };
+            }
+        );
+
+        await notifySendQueue.addBulk(
+            bulk
+        );
+
+        console.log(
+            "[NOTIF_FANOUT] job",
+            job.id,
+            "fanout =",
+            bulk.length,
+            {
+                matelPhone:
+                    matelPhone ||
+                    null,
+            }
+        );
+
+        return {
+            ok: true,
+            fanout:
+            bulk.length,
+            isMgmt:
+            isManagement,
+            event_key:
+                managementEventKey ||
+                null,
+            matel_phone:
+                matelPhone ||
+                null,
+        };
     },
+
     {
-        connection: redisConnection,
-        concurrency: Number(process.env.NOTIF_FANOUT_CONCURRENCY || 10),
+        connection:
+        redisConnection,
+
+        concurrency: Number(
+            process.env
+                .NOTIF_FANOUT_CONCURRENCY ||
+            10
+        ),
+
         limiter: {
-            max: Number(process.env.NOTIF_FANOUT_RATE_MAX || 50),
-            duration: Number(process.env.NOTIF_FANOUT_RATE_MS || 1000),
+            max: Number(
+                process.env
+                    .NOTIF_FANOUT_RATE_MAX ||
+                50
+            ),
+
+            duration: Number(
+                process.env
+                    .NOTIF_FANOUT_RATE_MS ||
+                1000
+            ),
         },
+    }
+);
+
+worker.on(
+    "active",
+    (job) => {
+        console.log(
+            "[NOTIF_FANOUT] active",
+            job.id,
+            job.name
+        );
+    }
+);
+
+worker.on(
+    "completed",
+    (job, result) => {
+        console.log(
+            "[NOTIF_FANOUT] completed",
+            job.id,
+            result
+        );
+    }
+);
+
+worker.on(
+    "failed",
+    (job, error) => {
+        console.error(
+            "[NOTIF_FANOUT] failed",
+            job?.id,
+            error?.message,
+            error?.stack
+        );
+    }
+);
+
+worker.on(
+    "error",
+    (error) => {
+        console.error(
+            "[NOTIF_FANOUT] worker error",
+            error?.message,
+            error?.stack
+        );
     }
 );

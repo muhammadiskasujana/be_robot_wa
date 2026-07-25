@@ -17,6 +17,8 @@ import * as Subs from "../controllers/admin/subscriptionController.js";
 import * as Fitur from "../controllers/admin/groupFeatureController.js"
 import * as LinkedPT from "../controllers/admin/linkedPT.controller.js"
 import * as DeleteHistory from "../controllers/admin/waDeleteHistory.controller.js"
+import * as GroupMatel from "../controllers/admin/groupMatel.controller.js";
+
 
 const router = Router();
 router.get("/delete-history", asyncWrap(DeleteHistory.list));
@@ -158,6 +160,58 @@ router.get("/linked-pt/:id", asyncWrap(LinkedPT.getById));
 router.post("/linked-pt", asyncWrap(LinkedPT.create));
 router.put("/linked-pt/:id", asyncWrap(LinkedPT.update));
 router.delete("/linked-pt/:id", asyncWrap(LinkedPT.remove));
+
+// =====================
+// Group Korlap Matels
+// =====================
+
+// Semua data matel, mendukung pagination/filter
+router.get(
+    "/group-matels",
+    asyncWrap(GroupMatel.list)
+);
+
+// Detail satu record matel
+router.get(
+    "/group-matels/:id",
+    asyncWrap(GroupMatel.getById)
+);
+
+// Daftar matel untuk satu grup korlap
+router.get(
+    "/groups/:groupId/matels",
+    asyncWrap(GroupMatel.listByGroup)
+);
+
+// Tambahkan matel ke grup korlap
+router.post(
+    "/groups/:groupId/matels",
+    asyncWrap(GroupMatel.create)
+);
+
+// Update data matel
+router.put(
+    "/group-matels/:id",
+    asyncWrap(GroupMatel.update)
+);
+
+// Aktif/nonaktifkan matel
+router.patch(
+    "/group-matels/:id/status",
+    asyncWrap(GroupMatel.updateStatus)
+);
+
+// Hard delete berdasarkan ID
+router.delete(
+    "/group-matels/:id",
+    asyncWrap(GroupMatel.remove)
+);
+
+// Hapus berdasarkan group dan nomor
+router.delete(
+    "/groups/:groupId/matels/:phone",
+    asyncWrap(GroupMatel.removeByPhone)
+);
 
 
 
