@@ -180,6 +180,10 @@ export function parseCommandV2(text, opts = {})  {
         };
     }
 
+    if (first === "list matel") {
+        return { key: "list_matel", args: [], argsLines: lines.slice(1) };
+    }
+
     if ((first === "input data motor" || first === "input data r2") && lines.length === 1) {
         return { key: "input_data_r2", args: [], argsLines: [] };
     }
