@@ -83,65 +83,14 @@ export async function getById(req, res) {
             ],
         });
 
-    export async function getById(req, res) {
-        const row = await WaGroup.findByPk(
-            req.params.id,
-            {
-                include: [
-                    {
-                        model: WaGroupMode,
-                        as: "mode",
-                    },
-                    {
-                        model: LeasingCompany,
-                        as: "leasing",
-                    },
-                    {
-                        model: LeasingBranch,
-                        as: "leasingBranch",
-                    },
-                    {
-                        model: WaGroupMatel,
-                        as: "matels",
-                        required: false,
-                        where: {
-                            is_active: true,
-                        },
-                    },
-                ],
-            }
-        );
-
-        if (!row) {
-            return res.status(404).json({
-                ok: false,
-                error: "Not found",
-            });
-        }
-
-        const branches =
-            await WaGroupLeasingBranch.findAll({
-                where: {
-                    group_id: row.id,
-                    is_active: true,
-                },
-                include: [
-                    {
-                        model: LeasingBranch,
-                        as: "branch",
-                    },
-                ],
-            });
-
-        res.json({
-            ok: true,
-            data: {
-                group: row,
-                allowedBranches: branches,
-                matels: row.matels || [],
-            },
-        });
-    }
+    res.json({
+        ok: true,
+        data: {
+            group: row,
+            allowedBranches: branches,
+            matels: row.matels || [],
+        },
+    });
 }
 
 export async function updateBasic(req, res) {
