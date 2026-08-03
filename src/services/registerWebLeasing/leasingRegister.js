@@ -10,10 +10,17 @@ function normLineKey(s) {
     return up(s).replace(/\s+/g, "_"); // "Kelola Bahan" -> "KELOLA_BAHAN"
 }
 
-function toHp08(phone) {
-    const p = String(phone || "").replace(/[^\d]/g, "");
-    if (p.startsWith("62")) return "0" + p.slice(2);
-    return p; // asumsi sudah 08xxxx
+function toHp62(phone) {
+    let p = String(phone || "")
+        .replace(/[^\d]/g, "");
+
+    if (p.startsWith("0")) {
+        p = "62" + p.slice(1);
+    } else if (p.startsWith("8")) {
+        p = "62" + p;
+    }
+
+    return p;
 }
 
 // ===== 1) build template =====
@@ -106,11 +113,11 @@ export async function registerLeasingUser({ nama, phone, leasing, cabang, handli
     const url = "https://finance.digitalmanager.id/api/user/register";
     const body = {
         nama,
-        phone: toHp08(phone),
-        leasing,          // string
-        cabang,           // array string
-        handling,         // 1/2/3
-        role,             // 1/2/3/4
+        phone: toHp62(phone),
+        leasing,
+        cabang,
+        handling,
+        role,
     };
 
     const res = await axios.post(url, body, {
