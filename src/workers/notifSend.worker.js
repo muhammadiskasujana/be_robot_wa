@@ -53,6 +53,58 @@
     function low(v) {
         return String(v || "").trim().toLowerCase();
     }
+
+    const KNOWN_LEASING_KEYS = [
+        "NSC-WO-CAR",
+        "NSC-WO",
+        "NSC",
+    ];
+
+    const LEASING_HIDE_PT_IDENTITY = new Set([
+        "NSC",
+    ]);
+
+    function normalizeLeasing(raw = "") {
+        const value = String(raw || "")
+            .trim()
+            .toUpperCase()
+            .replace(/\s+/g, " ");
+
+        if (!value) return "";
+
+        // Cek yang paling spesifik terlebih dahulu
+        for (const key of KNOWN_LEASING_KEYS) {
+            if (value === key || value.startsWith(`${key} `)) {
+                return key;
+            }
+        }
+
+        // Leasing lain:
+        // "ADIRA 0805" -> "ADIRA"
+        return value.split(" ")[0];
+    }
+
+    function isPtKhusus(data = {}) {
+        const pt = up(
+            pick(
+                data,
+                ["pt", "pt_name", "ptCompany", "pt_company"],
+                ""
+            )
+        );
+
+        return pt === "PT KHUSUS";
+    }
+
+    function shouldHidePtIdentity(data = {}) {
+        if (isPtKhusus(data)) {
+            return true;
+        }
+
+        const leasingKey = normalizeLeasing(data?.leasing);
+
+        return LEASING_HIDE_PT_IDENTITY.has(leasingKey);
+    }
     
     function formatRupiah(n) {
         const x = Number(String(n ?? "").replace(/[^\d.-]/g, ""));
@@ -171,91 +223,6 @@
         throw lastErr || new Error("all sessions failed");
     }
 
-    // function buildMessage(data, bill = null, opt = {}) {
-    //     const lines = [];
-    //     lines.push(`*HUNTER INFO*`);
-    //     lines.push(`Nopol: ${bold(data.nopol)}`);
-    //     if (data.nosin) lines.push(`Nosin: ${bold(data.nosin)}`);
-    //     if (data.noka) lines.push(`Noka: ${bold(data.noka)}`);
-    //     if (data.tipe) lines.push(`Tipe: ${bold(data.tipe)}`);
-    //     lines.push(`Leasing: ${bold(data.leasing)}`);
-    //     lines.push(`Cabang: ${bold(data.cabang)}`);
-    //     if (data.ovd) lines.push(`Ovd: ${bold(data.ovd)}`);
-    //
-    //     const tahunWarna = pick(data, ["tahun_warna", "tahunWarna", "tahun", "warna"], "");
-    //     if (tahunWarna) lines.push(`Tahun/Warna: ${bold(tahunWarna)}`);
-    //
-    //     const contactPerson = pick(data, ["contact_person", "contactPerson", "cp", "no_hp_cp", "phone_cp"], "");
-    //     if (contactPerson) lines.push(`Contact Person: ${bold(contactPerson)}`);
-    //
-    //     if (data.keterangan) lines.push(`Keterangan: ${bold(data.keterangan)}`);
-    //
-    //     const reportAwal = pick(data, ["report_awal", "reportAwal", "report", "note_report"], "");
-    //     if (reportAwal) lines.push(`Report Awal: ${bold(reportAwal)}`);
-    //
-    //     const tanggalReportLama = pick(data, ["tanggal_report", "tanggalReport"], "");
-    //     const reportDateBaru = pick(data, ["reportDate"], "");
-    //     const reportDate = reportDateBaru || tanggalReportLama;
-    //     if (reportDate) lines.push(`Tanggal Report: ${bold(reportDate)}`);
-    //
-    //     const reportMessage = pick(data, ["reportMessage"], "");
-    //     if (reportMessage) {
-    //         lines.push(``);
-    //         lines.push(`*STATUS AWAL INFO*`);
-    //         lines.push(``);
-    //         // lines.push(`Pesan berikut merupakan *informasi awal / laporan awal di lapangan* dan perlu diverifikasi kembali:`);
-    //         lines.push(`${bold(String(reportMessage).toUpperCase())}`);
-    //     }
-    //
-    //     lines.push(`*===============*`);
-    //
-    //     const userName = pick(data, ["user", "nama_user", "username"], "-");
-    //     const userHp = pick(data, ["no_hp", "hp", "phone", "user_phone"], "-");
-    //     const ptName = pick(data, ["pt", "pt_name", "ptCompany", "pt_company"], "-");
-    //     const aksesTanggal = pick(data, ["accessDate", "waktu_akses", "waktuAkses", "access_at"], "-");
-    //
-    //     const picPt = pick(data, ["pic_pt", "picPt"], "");
-    //     const picPtHp = pick(data, ["no_hp_pic_pt", "hp_pic_pt", "pic_phone"], "");
-    //
-    //     const accessLoc = data.accessLoc || data.access_loc || data.loc || data.location || null;
-    //     const map = googleMapsUrl(accessLoc);
-    //
-    //     const alamat =
-    //         pick(accessLoc, ["address", "formatted_address"], "") ||
-    //         pick(data, ["accessAddr", "access_addr", "alamat", "address", "formatted_address"], "");
-    //
-    //     let paragraph = `Telah diakses oleh *${userName} (${userHp})* dari *${ptName}* pada tanggal *${aksesTanggal}*.`;
-    //
-    //     if (picPt || picPtHp) {
-    //         paragraph += ` PIC PT: *${picPt || "-"} (${picPtHp || "-"})*.`;
-    //     }
-    //
-    //     if (map) {
-    //         paragraph += ` Lokasi akses data ${map}.`;
-    //     }
-    //
-    //     if (alamat) {
-    //         paragraph += ` Alamat terpantau: ${alamat}.`;
-    //     }
-    //
-    //     lines.push(paragraph);
-    //
-    //     if (bill?.billing_mode === "CREDIT" && bill?.charged) {
-    //         lines.push("");
-    //         if (opt?.mentionPhone) lines.push(`👤 PIC: @${normPhone62(opt.mentionPhone)}`);
-    //         lines.push(`💳 *Info Kredit*`);
-    //         lines.push(`Biaya: *${bill.credit_cost ?? 1}*`);
-    //         lines.push(`Sisa: *${bill.balance_after ?? "-"}*`);
-    //     }
-    //
-    //     return lines.join("\n");
-    // }
-
-    function isPtKhusus(data = {}) {
-        const pt = up(pick(data, ["pt", "pt_name", "ptCompany", "pt_company"], ""));
-        return pt === "PT KHUSUS";
-    }
-
     function buildMessage(data, bill = null, opt = {}) {
         const lines = [];
 
@@ -282,7 +249,8 @@
             pick(accessLoc, ["address", "formatted_address"], "") ||
             pick(data, ["accessAddr", "access_addr", "alamat", "address", "formatted_address"], "");
 
-        const hidePtIdentity = isPtKhusus(data);
+        const leasingKey = normalizeLeasing(data.leasing);
+        const hidePtIdentity = shouldHidePtIdentity(data);
 
         lines.push(`🚨 *HUNTER INFO* 🚨`);
         lines.push(`📌 🚗 *Data Kendaraan*`);
