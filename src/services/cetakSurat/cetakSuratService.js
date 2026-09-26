@@ -125,7 +125,11 @@ export async function generateWhatsAppDocument({
             request_metadata: requestMetadata,
         },
         {
-            headers: { "X-External-Token": token, "Content-Type": "application/json" },
+            headers: {
+                "X-External-Token": token,
+                "X-Tenant": tenantCode,
+                "Content-Type": "application/json",
+            },
             responseType: "arraybuffer",
             timeout: 120000,
             validateStatus: () => true,
