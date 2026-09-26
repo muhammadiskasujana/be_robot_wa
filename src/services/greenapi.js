@@ -57,3 +57,48 @@ export async function sendText(ctx) {
     }
 }
 
+export async function sendFileByUpload({
+    idInstance,
+    apiToken,
+    chatId,
+    buffer,
+    filename,
+    contentType = "application/pdf",
+    caption = "",
+}) {
+    const fileBuffer = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer || "");
+    if (!fileBuffer.length) throw new Error("File WhatsApp kosong");
+
+    const form = new FormData();
+    form.append("chatId", String(chatId || ""));
+    form.append("file", fileBuffer, {
+        filename: String(filename || "document.pdf"),
+        contentType,
+        knownLength: fileBuffer.length,
+    });
+    form.append("fileName", String(filename || "document.pdf"));
+    if (caption) form.append("caption", String(caption).slice(0, 1024));
+
+    const response = await axios.post(
+        `https://media.green-api.com/waInstance${idInstance}/sendFileByUpload/${apiToken}`,
+        form,
+        {
+            headers: form.getHeaders(),
+            httpsAgent,
+            timeout: 120000,
+            maxBodyLength: Infinity,
+            maxContentLength: Infinity,
+            validateStatus: () => true,
+        }
+    );
+
+    const messageId = response.data?.idMessage || response.data?.messageId;
+    if (response.status !== 200 || !messageId) {
+        throw new Error(
+            `GreenAPI upload gagal: status=${response.status} body=${JSON.stringify(response.data)}`
+        );
+    }
+
+    return response.data;
+}
+

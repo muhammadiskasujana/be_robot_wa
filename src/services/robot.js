@@ -12,7 +12,7 @@ import {
     WaDeleteHistory,
 } from "../models/index.js";
 import crypto from "crypto";
-import { sendText } from "./greenapi.js";
+import { sendFileByUpload, sendText } from "./greenapi.js";
 import { fetchAccessReportXlsx } from "./tarikreport/reportsAccess.js";
 import { fetchRekapDataXlsx } from "./rekapJumlahData/fetchRekapDataXlsx.js";
 import {listSftpFiles, downloadSftpFileXlsx, vpnStatus, vpnUp} from "./sftp/sftpFiles.js";
@@ -4257,12 +4257,6 @@ export async function handleIncoming({ instance, webhook }) {
         }
 
         const personalChatId = String(senderJid || "").includes("@") ? senderJid : `${phone}@c.us`;
-        const publicBase = String(process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
-        if (!publicBase) {
-            await sendText({ ...ctx, message: "❌ PUBLIC_BASE_URL belum diset." });
-            return;
-        }
-
         await sendText({ ...ctx, message: "⏳ Dokumen sedang dibuat. Hasil akan dikirim ke chat pribadi." });
 
         try {
@@ -4277,26 +4271,27 @@ export async function handleIncoming({ instance, webhook }) {
                 leasing: { code: leasingRow.code, name: leasingRow.name },
                 branch,
             });
-            const file = await saveTempFile(result.buffer, result.filename, result.contentType);
-            const link = `${publicBase}/api/temp-files/dl/${file.token}`;
             const branchLabel = branch.name || branch.code || "TIDAK DISET";
             const documentNumber = result.documentNumber ? `\nNomor dokumen: ${result.documentNumber}` : "";
 
-            await sendText({
-                ...ctx,
+            await sendFileByUpload({
+                idInstance: ctx.idInstance,
+                apiToken: ctx.apiToken,
                 chatId: personalChatId,
-                message:
-                    "✅ Dokumen berhasil dibuat\n\n" +
+                buffer: result.buffer,
+                filename: result.filename,
+                contentType: result.contentType,
+                caption:
+                    "✅ Dokumen berhasil dibuat\n" +
                     `Jenis: ${documentType.toUpperCase()}\n` +
                     `Kendaraan: ${vehicleType}\n` +
                     `Tenant: ${tenant}\n` +
                     `Nopol: ${nopol}\n` +
                     `Leasing: ${leasingRow.name || leasingRow.code}\n` +
                     `Cabang: ${branchLabel}` +
-                    documentNumber +
-                    `\n\n⬇️ Download PDF (berlaku 5 menit):\n${link}`,
+                    documentNumber,
             });
-            await sendText({ ...ctx, message: "✅ Dokumen berhasil dibuat dan dikirim ke chat pribadi." });
+            await sendText({ ...ctx, message: "✅ PDF berhasil dibuat dan dikirim langsung ke chat pribadi." });
         } catch (error) {
             await sendText({ ...ctx, message: `❌ Gagal membuat dokumen.\n${error?.message || "Unknown error"}` });
         }
