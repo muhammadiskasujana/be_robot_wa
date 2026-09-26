@@ -51,6 +51,10 @@ import {deleteLeasingUser} from "./registerWebLeasing/deleteLeasingUser.js";
 import {formatRequestLokasiMessage, parseRequestLokasiInput, requestLokasiTerbaru} from "./lokasi/requestLokasi.js";
 import {fetchUsersReportXlsx} from "./tarikreport/fetchUsersReportXlsx.js";
 import {guardFeature} from "./middleware/cekFitur.js";
+import {
+    generateWhatsAppDocument,
+    resolveCetakSuratPersonalPolicy,
+} from "./cetakSurat/cetakSuratService.js";
 const { Op } = Sequelize;
 
 
@@ -346,6 +350,7 @@ const GUARDED_COMMANDS = new Set([
     "input_data",
     "input_data_r2",
     "input_data_r4",
+    "cetak_surat",
 ]);
 
 async function enforceGroupPermission({ key, group, master, ctx, chatId, senderJid }) {
@@ -4191,6 +4196,118 @@ export async function handleIncoming({ instance, webhook }) {
             });
         }
 
+        return;
+    }
+
+    if (key === "cetak_surat") {
+        const [documentTypeRaw, vehicleTypeRaw, matelPhoneRaw, nopolRaw, ...extra] = args || [];
+        const documentType = String(documentTypeRaw || "").toLowerCase();
+        const vehicleType = String(vehicleTypeRaw || "").toUpperCase();
+        const matelPhone = normalizePhone62(matelPhoneRaw);
+        const nopol = normPlate(nopolRaw);
+
+        if (
+            !["penugasan", "bastk", "paket"].includes(documentType) ||
+            !["R2", "R4"].includes(vehicleType) ||
+            !matelPhone ||
+            !nopol ||
+            extra.length
+        ) {
+            await sendText({
+                ...ctx,
+                message:
+                    "❌ Format command tidak valid.\n" +
+                    "Gunakan: cetak [penugasan|bastk|paket] [R2|R4] [nomor HP matel] [nopol]\n\n" +
+                    "Contoh: cetak paket R4 085212345678 DA4321BB",
+            });
+            return;
+        }
+
+        if (!group.leasing_id) {
+            await sendText({ ...ctx, message: "❌ Leasing group belum diset." });
+            return;
+        }
+        if (!group.pt_company_id) {
+            await sendText({ ...ctx, message: "❌ PT/tenant group belum diset." });
+            return;
+        }
+
+        let personalPolicy = null;
+        if (!master) {
+            personalPolicy = await resolveCetakSuratPersonalPolicy({ phoneE164: phone, group });
+            if (!personalPolicy) {
+                await sendText({
+                    ...ctx,
+                    message: "❌ Nomor kamu belum memiliki akses cetak surat pada group ini. Silakan hubungi admin.",
+                });
+                return;
+            }
+        }
+
+        const [leasingRow, ptRow] = await Promise.all([
+            LeasingCompany.findByPk(group.leasing_id, { attributes: ["code", "name", "is_active"] }),
+            PtCompany.findByPk(group.pt_company_id, { attributes: ["code", "name", "is_active"] }),
+        ]);
+        if (!leasingRow?.is_active) {
+            await sendText({ ...ctx, message: "❌ Leasing group tidak aktif atau tidak valid." });
+            return;
+        }
+        if (!ptRow?.is_active || !ptRow?.code) {
+            await sendText({ ...ctx, message: "❌ PT/tenant group tidak aktif atau tidak valid." });
+            return;
+        }
+
+        let branch = personalPolicy?.branch || { code: "", name: "" };
+        if (master && !branch.code && !branch.name && group.leasing_branch_id) {
+            const branchRow = await LeasingBranch.findByPk(group.leasing_branch_id, {
+                attributes: ["code", "name", "is_active"],
+            });
+            if (branchRow?.is_active) branch = { code: branchRow.code || "", name: branchRow.name || "" };
+        }
+
+        const personalChatId = String(senderJid || "").includes("@") ? senderJid : `${phone}@c.us`;
+        const publicBase = String(process.env.PUBLIC_BASE_URL || "").replace(/\/$/, "");
+        if (!publicBase) {
+            await sendText({ ...ctx, message: "❌ PUBLIC_BASE_URL belum diset." });
+            return;
+        }
+
+        await sendText({ ...ctx, message: "⏳ Dokumen sedang dibuat. Hasil akan dikirim ke chat pribadi." });
+
+        try {
+            const result = await generateWhatsAppDocument({
+                documentType,
+                vehicleType,
+                tenant: ptRow.code,
+                matelPhone,
+                nopol,
+                requestedByPhone: phone,
+                requestedByName: webhook?.senderData?.senderName || webhook?.senderData?.chatName || "BOT WHATSAPP",
+                leasing: { code: leasingRow.code, name: leasingRow.name },
+                branch,
+            });
+            const file = await saveTempFile(result.buffer, result.filename, result.contentType);
+            const link = `${publicBase}/api/temp-files/dl/${file.token}`;
+            const branchLabel = branch.name || branch.code || "TIDAK DISET";
+            const documentNumber = result.documentNumber ? `\nNomor dokumen: ${result.documentNumber}` : "";
+
+            await sendText({
+                ...ctx,
+                chatId: personalChatId,
+                message:
+                    "✅ Dokumen berhasil dibuat\n\n" +
+                    `Jenis: ${documentType.toUpperCase()}\n` +
+                    `Kendaraan: ${vehicleType}\n` +
+                    `Nopol: ${nopol}\n` +
+                    `Leasing: ${leasingRow.name || leasingRow.code}\n` +
+                    `Cabang: ${branchLabel}` +
+                    documentNumber +
+                    `\n\n⬇️ Download PDF (berlaku 5 menit):\n${link}`,
+            });
+            await sendText({ ...ctx, message: "✅ Dokumen berhasil dibuat dan dikirim ke chat pribadi." });
+        } catch (error) {
+            await sendText({ ...ctx, message: `❌ Gagal membuat dokumen.\n${error?.message || "Unknown error"}` });
+        }
         return;
     }
 

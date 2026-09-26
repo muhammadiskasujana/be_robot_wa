@@ -231,6 +231,16 @@ export function parseCommandV2(text, opts = {})  {
         return { key: "request_lokasi", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
+    // cetak [penugasan|bastk|paket] [R2|R4] [nomor HP matel] [nopol]
+    if (first === "cetak" || first.startsWith("cetak ")) {
+        const raw = first.replace(/^cetak\s*/i, "").trim();
+        return {
+            key: "cetak_surat",
+            args: raw.split(/\s+/).filter(Boolean),
+            argsLines: lines.slice(1),
+        };
+    }
+
     // history AB1234CD
     if (first.startsWith("delete")) {
         const after = first.replace("delete", "").trim();

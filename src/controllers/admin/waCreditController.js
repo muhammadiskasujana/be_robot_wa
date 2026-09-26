@@ -196,6 +196,9 @@ export async function createPolicy(req, res) {
     try {
         const row = await WaCommandPolicy.create({
             ...norm,
+            ...(norm.scope_type === "PERSONAL"
+                ? { group_id: req.body.group_id || null, leasing_id: req.body.leasing_id || null }
+                : {}),
             command_id,
             is_enabled,
             billing_mode: bm,
@@ -247,6 +250,14 @@ export async function updatePolicy(req, res) {
         billing_mode: bm,
         credit_cost,
         wallet_scope,
+        group_id:
+            row.scope_type === "PERSONAL" && req.body.group_id !== undefined
+                ? (req.body.group_id || null)
+                : row.group_id,
+        leasing_id:
+            row.scope_type === "PERSONAL" && req.body.leasing_id !== undefined
+                ? (req.body.leasing_id || null)
+                : row.leasing_id,
         meta: req.body.meta !== undefined ? (req.body.meta || null) : row.meta,
     });
 
