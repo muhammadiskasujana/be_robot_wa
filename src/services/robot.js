@@ -4200,15 +4200,17 @@ export async function handleIncoming({ instance, webhook }) {
     }
 
     if (key === "cetak_surat") {
-        const [documentTypeRaw, vehicleTypeRaw, matelPhoneRaw, nopolRaw, ...extra] = args || [];
+        const [documentTypeRaw, vehicleTypeRaw, tenantRaw, matelPhoneRaw, nopolRaw, ...extra] = args || [];
         const documentType = String(documentTypeRaw || "").toLowerCase();
         const vehicleType = String(vehicleTypeRaw || "").toUpperCase();
+        const tenant = String(tenantRaw || "").trim().toLowerCase();
         const matelPhone = normalizePhone62(matelPhoneRaw);
         const nopol = normPlate(nopolRaw);
 
         if (
             !["penugasan", "bastk", "paket"].includes(documentType) ||
             !["R2", "R4"].includes(vehicleType) ||
+            !/^[a-z0-9][a-z0-9_-]*$/.test(tenant) ||
             !matelPhone ||
             !nopol ||
             extra.length
@@ -4217,8 +4219,8 @@ export async function handleIncoming({ instance, webhook }) {
                 ...ctx,
                 message:
                     "❌ Format command tidak valid.\n" +
-                    "Gunakan: cetak [penugasan|bastk|paket] [R2|R4] [nomor HP matel] [nopol]\n\n" +
-                    "Contoh: cetak paket R4 085212345678 DA4321BB",
+                    "Gunakan: cetak [penugasan|bastk|paket] [R2|R4] [slug tenant] [nomor HP matel] [nopol]\n\n" +
+                    "Contoh: cetak paket R4 hsn 085212345678 DA4321BB",
             });
             return;
         }
@@ -4227,11 +4229,6 @@ export async function handleIncoming({ instance, webhook }) {
             await sendText({ ...ctx, message: "❌ Leasing group belum diset." });
             return;
         }
-        if (!group.pt_company_id) {
-            await sendText({ ...ctx, message: "❌ PT/tenant group belum diset." });
-            return;
-        }
-
         let personalPolicy = null;
         if (!master) {
             personalPolicy = await resolveCetakSuratPersonalPolicy({ phoneE164: phone, group });
@@ -4244,19 +4241,13 @@ export async function handleIncoming({ instance, webhook }) {
             }
         }
 
-        const [leasingRow, ptRow] = await Promise.all([
-            LeasingCompany.findByPk(group.leasing_id, { attributes: ["code", "name", "is_active"] }),
-            PtCompany.findByPk(group.pt_company_id, { attributes: ["code", "name", "is_active"] }),
-        ]);
+        const leasingRow = await LeasingCompany.findByPk(group.leasing_id, {
+            attributes: ["code", "name", "is_active"],
+        });
         if (!leasingRow?.is_active) {
             await sendText({ ...ctx, message: "❌ Leasing group tidak aktif atau tidak valid." });
             return;
         }
-        if (!ptRow?.is_active || !ptRow?.code) {
-            await sendText({ ...ctx, message: "❌ PT/tenant group tidak aktif atau tidak valid." });
-            return;
-        }
-
         let branch = personalPolicy?.branch || { code: "", name: "" };
         if (master && !branch.code && !branch.name && group.leasing_branch_id) {
             const branchRow = await LeasingBranch.findByPk(group.leasing_branch_id, {
@@ -4278,7 +4269,7 @@ export async function handleIncoming({ instance, webhook }) {
             const result = await generateWhatsAppDocument({
                 documentType,
                 vehicleType,
-                tenant: ptRow.code,
+                tenant,
                 matelPhone,
                 nopol,
                 requestedByPhone: phone,
@@ -4298,6 +4289,7 @@ export async function handleIncoming({ instance, webhook }) {
                     "✅ Dokumen berhasil dibuat\n\n" +
                     `Jenis: ${documentType.toUpperCase()}\n` +
                     `Kendaraan: ${vehicleType}\n` +
+                    `Tenant: ${tenant}\n` +
                     `Nopol: ${nopol}\n` +
                     `Leasing: ${leasingRow.name || leasingRow.code}\n` +
                     `Cabang: ${branchLabel}` +

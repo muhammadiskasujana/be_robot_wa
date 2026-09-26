@@ -96,7 +96,8 @@ export async function generateWhatsAppDocument({
 
     if (!DOCUMENT_TYPES.has(document_type)) throw new Error("Jenis dokumen harus bastk, penugasan, atau paket.");
     if (!VEHICLE_TYPES.has(vehicle_type)) throw new Error("Jenis kendaraan harus R2 atau R4.");
-    if (!tenantCode) throw new Error("Tenant/PT group belum tersedia.");
+    if (!tenantCode) throw new Error("Slug tenant wajib diisi.");
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(tenantCode)) throw new Error("Slug tenant tidak valid.");
     if (!matel_phone) throw new Error("Nomor HP matel tidak valid.");
     if (!plate) throw new Error("Nopol tidak valid.");
 

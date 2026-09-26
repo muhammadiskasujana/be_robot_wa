@@ -2,10 +2,10 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseCommandV2 } from "../src/services/parser.js";
 
-test("parses cetak surat command without changing normalized command behavior", () => {
-    assert.deepEqual(parseCommandV2("cetak paket R4 085212345678 DA4321BB"), {
+test("parses cetak surat command with tenant slug without changing normalized command behavior", () => {
+    assert.deepEqual(parseCommandV2("cetak paket R4 hsn 085212345678 DA4321BB"), {
         key: "cetak_surat",
-        args: ["paket", "r4", "085212345678", "da4321bb"],
+        args: ["paket", "r4", "hsn", "085212345678", "da4321bb"],
         argsLines: [],
     });
 
