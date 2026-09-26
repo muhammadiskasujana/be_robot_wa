@@ -4267,7 +4267,7 @@ export async function handleIncoming({ instance, webhook }) {
                 matelPhone,
                 nopol,
                 requestedByPhone: phone,
-                requestedByName: webhook?.senderData?.senderName || webhook?.senderData?.chatName || "BOT WHATSAPP",
+                requestedByName: phone,
                 leasing: { code: leasingRow.code, name: leasingRow.name },
                 branch,
             });
