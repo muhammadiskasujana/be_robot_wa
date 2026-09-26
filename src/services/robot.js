@@ -53,7 +53,6 @@ import {fetchUsersReportXlsx} from "./tarikreport/fetchUsersReportXlsx.js";
 import {guardFeature} from "./middleware/cekFitur.js";
 import {
     generateWhatsAppDocument,
-    resolveCetakSuratPersonalPolicy,
 } from "./cetakSurat/cetakSuratService.js";
 const { Op } = Sequelize;
 
@@ -350,7 +349,6 @@ const GUARDED_COMMANDS = new Set([
     "input_data",
     "input_data_r2",
     "input_data_r4",
-    "cetak_surat",
 ]);
 
 async function enforceGroupPermission({ key, group, master, ctx, chatId, senderJid }) {
@@ -4229,18 +4227,6 @@ export async function handleIncoming({ instance, webhook }) {
             await sendText({ ...ctx, message: "❌ Leasing group belum diset." });
             return;
         }
-        let personalPolicy = null;
-        if (!master) {
-            personalPolicy = await resolveCetakSuratPersonalPolicy({ phoneE164: phone, group });
-            if (!personalPolicy) {
-                await sendText({
-                    ...ctx,
-                    message: "❌ Nomor kamu belum memiliki akses cetak surat pada group ini. Silakan hubungi admin.",
-                });
-                return;
-            }
-        }
-
         const leasingRow = await LeasingCompany.findByPk(group.leasing_id, {
             attributes: ["code", "name", "is_active"],
         });
@@ -4248,8 +4234,8 @@ export async function handleIncoming({ instance, webhook }) {
             await sendText({ ...ctx, message: "❌ Leasing group tidak aktif atau tidak valid." });
             return;
         }
-        let branch = personalPolicy?.branch || { code: "", name: "" };
-        if (master && !branch.code && !branch.name && group.leasing_branch_id) {
+        let branch = { code: "", name: "" };
+        if (group.leasing_branch_id) {
             const branchRow = await LeasingBranch.findByPk(group.leasing_branch_id, {
                 attributes: ["code", "name", "is_active"],
             });
