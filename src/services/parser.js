@@ -90,6 +90,21 @@ export function parseCommandV2(text, opts = {})  {
         return { key: "set_target", args: combined ? [combined] : [], argsLines: lines.slice(1) };
     }
 
+    if (first === "set input tarikan" || first.startsWith("set input tarikan ")) {
+        const after = cleanAfterCommand(first.replace(/^set input tarikan/i, ""));
+        const extra = lines.slice(1).join(" ").trim();
+        const combined = [after, extra].filter(Boolean).join(" ").trim();
+        return { key: "set_input_tarikan", args: combined ? [combined] : [], argsLines: lines.slice(1) };
+    }
+
+    if (first === "status input tarikan") {
+        return { key: "status_input_tarikan", args: [], argsLines: lines.slice(1) };
+    }
+
+    if (first === "unset input tarikan" || first === "hapus input tarikan") {
+        return { key: "unset_input_tarikan", args: [], argsLines: lines.slice(1) };
+    }
+
     // set leasing adira
     if (first.startsWith("set leasing ")) {
         const code = first.replace("set leasing ", "").trim();

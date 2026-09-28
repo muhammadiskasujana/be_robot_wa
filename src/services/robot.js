@@ -710,6 +710,56 @@ async function setManageTarget(group, targetRaw) {
     return { ok: true, targets };
 }
 
+function parseInputTarikanSetting(rawValue = "") {
+    const raw = String(rawValue || "").trim();
+    const normalized = raw.toUpperCase().replace(/\s+/g, " ");
+    if (normalized.startsWith("ALL") || ["FINANCE", "LEASING"].includes(normalized)) {
+        return { ok: true, filter: { mode: "ALL", leasing_codes: [] } };
+    }
+
+    const withoutPrefix = raw.replace(/^(only\s+)?(finance|leasing)\s*/i, "").trim();
+    const leasingCodes = withoutPrefix
+        .split(/[,|;\n]+/)
+        .map((value) => {
+            const parts = value.trim().toUpperCase().split(/\s+/).filter(Boolean);
+            const first = (parts[0] || "").replace(/[^A-Z0-9-]/g, "");
+            const second = (parts[1] || "").replace(/[^A-Z0-9-]/g, "");
+            return second && !/^\d+$/.test(second) ? `${first}-${second}` : first;
+        })
+        .filter(Boolean)
+        .filter((value, index, values) => values.indexOf(value) === index);
+
+    if (!leasingCodes.length) {
+        return { ok: false, error: "Format: set input tarikan all, atau set input tarikan leasing FIF, BFI" };
+    }
+    return { ok: true, filter: { mode: "ONLY", leasing_codes: leasingCodes } };
+}
+
+async function configureInputTarikan(group, rawValue) {
+    const parsed = parseInputTarikanSetting(rawValue);
+    if (!parsed.ok) return parsed;
+
+    const currentTargets = normTargets(group.manage_target);
+    if (!currentTargets.includes("INPUT_TARIKAN")) currentTargets.push("INPUT_TARIKAN");
+    group.manage_target = currentTargets.join(",");
+    group.meta = group.meta && typeof group.meta === "object" && !Array.isArray(group.meta) ? { ...group.meta } : {};
+    group.meta.input_tarikan_filter = parsed.filter;
+    group.meta.manage_targets = currentTargets;
+    group.changed("meta", true);
+    await group.save();
+    return { ok: true, filter: parsed.filter };
+}
+
+async function unsetInputTarikan(group) {
+    const currentTargets = normTargets(group.manage_target).filter((value) => value !== "INPUT_TARIKAN");
+    group.manage_target = currentTargets.join(",") || null;
+    group.meta = group.meta && typeof group.meta === "object" && !Array.isArray(group.meta) ? { ...group.meta } : {};
+    delete group.meta.input_tarikan_filter;
+    group.meta.manage_targets = currentTargets;
+    group.changed("meta", true);
+    await group.save();
+}
+
 async function ensureModeInputData(group) {
     const mode = await WaGroupMode.findOne({ where: { key: "input_data", is_active: true } });
     if (!mode) return { ok: false, error: "Mode input_data belum ada di DB" };
@@ -2270,6 +2320,53 @@ export async function handleIncoming({ instance, webhook }) {
             ...ctx,
             message: `✅ Target management diset:\n- ${r.targets.join("\n- ")}`,
         });
+        return;
+    }
+
+    if (key === "set_input_tarikan") {
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
+        const modeKeyNow = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
+        if (modeKeyNow !== "management") {
+            await sendText({ ...ctx, message: "❌ Command ini hanya untuk mode management.\nGunakan: set mode management" });
+            return;
+        }
+
+        const result = await configureInputTarikan(group, args?.[0] || "");
+        if (!result.ok) {
+            await sendText({ ...ctx, message: `❌ ${result.error}` });
+            return;
+        }
+        const detail = result.filter.mode === "ALL"
+            ? "Semua finance/leasing"
+            : `Leasing: ${result.filter.leasing_codes.join(", ")}`;
+        await sendText({ ...ctx, message: `✅ Notifikasi input tarikan aktif.\nFilter: ${detail}` });
+        return;
+    }
+
+    if (key === "status_input_tarikan") {
+        const enabled = normTargets(group.manage_target).includes("INPUT_TARIKAN");
+        const filter = group.meta?.input_tarikan_filter || { mode: "ALL", leasing_codes: [] };
+        const detail = String(filter.mode || "ALL").toUpperCase() === "ONLY"
+            ? `Leasing: ${(filter.leasing_codes || []).join(", ") || "-"}`
+            : "Semua finance/leasing";
+        await sendText({
+            ...ctx,
+            message: enabled
+                ? `✅ Notifikasi input tarikan aktif.\nFilter: ${detail}`
+                : "⛔ Notifikasi input tarikan belum aktif.",
+        });
+        return;
+    }
+
+    if (key === "unset_input_tarikan") {
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
+        const modeKeyNow = String((await getModeKeyCached(group.mode_id)) || "").toLowerCase();
+        if (modeKeyNow !== "management") {
+            await sendText({ ...ctx, message: "❌ Command ini hanya untuk mode management." });
+            return;
+        }
+        await unsetInputTarikan(group);
+        await sendText({ ...ctx, message: "✅ Notifikasi input tarikan dinonaktifkan tanpa mengubah target management lain." });
         return;
     }
 
