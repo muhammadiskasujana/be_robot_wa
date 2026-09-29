@@ -9,6 +9,18 @@ test("parses cetak surat command with tenant slug without changing normalized co
         argsLines: [],
     });
 
+    assert.deepEqual(parseCommandV2("Cetak paket kuasa R2 LBS 081351275916 DN3946OH"), {
+        key: "cetak_surat",
+        args: ["paket", "kuasa", "r2", "lbs", "081351275916", "dn3946oh"],
+        argsLines: [],
+    });
+
+    assert.deepEqual(parseCommandV2("Cetak kuasa R4 HSN 085212345678 DA4321BB"), {
+        key: "cetak_surat",
+        args: ["kuasa", "r4", "hsn", "085212345678", "da4321bb"],
+        argsLines: [],
+    });
+
     assert.deepEqual(parseCommandV2("cek nopol DA1234BB"), {
         key: "cek_nopol",
         args: ["da1234bb"],

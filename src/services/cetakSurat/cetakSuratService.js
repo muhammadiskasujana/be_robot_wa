@@ -4,7 +4,8 @@ import { WaCommand, WaCommandPolicy } from "../../models/index.js";
 
 const { Op } = Sequelize;
 const COMMAND_KEY = "cetak_surat";
-const DOCUMENT_TYPES = new Set(["bastk", "penugasan", "paket"]);
+const DOCUMENT_TYPES = new Set(["bastk", "penugasan", "kuasa", "paket"]);
+const BUNDLE_LETTER_TYPES = new Set(["penugasan", "kuasa"]);
 const VEHICLE_TYPES = new Set(["R2", "R4"]);
 
 function clean(value) {
@@ -85,16 +86,22 @@ export async function resolveCetakSuratPersonalPolicy({ phoneE164, group }) {
 }
 
 export async function generateWhatsAppDocument({
-    documentType, vehicleType, tenant, matelPhone, nopol,
+    documentType, bundleLetterType, vehicleType, tenant, matelPhone, nopol,
     requestedByPhone, requestedByName, leasing, branch,
 }) {
     const document_type = clean(documentType).toLowerCase();
+    const bundle_letter_type = clean(bundleLetterType || "penugasan").toLowerCase() === "tugas"
+        ? "penugasan"
+        : clean(bundleLetterType || "penugasan").toLowerCase();
     const vehicle_type = clean(vehicleType).toUpperCase();
     const tenantCode = clean(tenant).toLowerCase();
     const matel_phone = normalizePhone(matelPhone);
     const plate = normalizePlate(nopol);
 
-    if (!DOCUMENT_TYPES.has(document_type)) throw new Error("Jenis dokumen harus bastk, penugasan, atau paket.");
+    if (!DOCUMENT_TYPES.has(document_type)) throw new Error("Jenis dokumen harus bastk, penugasan, kuasa, atau paket.");
+    if (document_type === "paket" && !BUNDLE_LETTER_TYPES.has(bundle_letter_type)) {
+        throw new Error("Jenis surat paket harus tugas/penugasan atau kuasa.");
+    }
     if (!VEHICLE_TYPES.has(vehicle_type)) throw new Error("Jenis kendaraan harus R2 atau R4.");
     if (!tenantCode) throw new Error("Slug tenant wajib diisi.");
     if (!/^[a-z0-9][a-z0-9_-]*$/.test(tenantCode)) throw new Error("Slug tenant tidak valid.");
@@ -116,6 +123,7 @@ export async function generateWhatsAppDocument({
         `${baseUrl}/api/tarikan-documents-external/whatsapp/generate`,
         {
             document_type,
+            ...(document_type === "paket" ? { bundle_letter_type } : {}),
             vehicle_type,
             tenant: tenantCode,
             matel_phone,
@@ -154,6 +162,8 @@ export async function generateWhatsAppDocument({
         documentNumber: clean(response.headers?.["x-document-number"]),
         documentCount: clean(response.headers?.["x-document-count"]),
         assignmentBasis: clean(response.headers?.["x-assignment-basis"]),
+        financeIdentitySource: clean(response.headers?.["x-finance-identity-source"]),
+        bundleLetterType: document_type === "paket" ? bundle_letter_type : "",
         requestMetadata,
     };
 }

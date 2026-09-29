@@ -4327,15 +4327,22 @@ export async function handleIncoming({ instance, webhook }) {
     }
 
     if (key === "cetak_surat") {
-        const [documentTypeRaw, vehicleTypeRaw, tenantRaw, matelPhoneRaw, nopolRaw, ...extra] = args || [];
+        const commandArgs = [...(args || [])];
+        const documentTypeRaw = commandArgs.shift();
         const documentType = String(documentTypeRaw || "").toLowerCase();
+        let bundleLetterType = "";
+        if (documentType === "paket" && ["tugas", "penugasan", "kuasa"].includes(String(commandArgs[0] || "").toLowerCase())) {
+            const bundleRaw = String(commandArgs.shift() || "").toLowerCase();
+            bundleLetterType = bundleRaw === "tugas" ? "penugasan" : bundleRaw;
+        }
+        const [vehicleTypeRaw, tenantRaw, matelPhoneRaw, nopolRaw, ...extra] = commandArgs;
         const vehicleType = String(vehicleTypeRaw || "").toUpperCase();
         const tenant = String(tenantRaw || "").trim().toLowerCase();
         const matelPhone = normalizePhone62(matelPhoneRaw);
         const nopol = normPlate(nopolRaw);
 
         if (
-            !["penugasan", "bastk", "paket"].includes(documentType) ||
+            !["penugasan", "kuasa", "bastk", "paket"].includes(documentType) ||
             !["R2", "R4"].includes(vehicleType) ||
             !/^[a-z0-9][a-z0-9_-]*$/.test(tenant) ||
             !matelPhone ||
@@ -4346,8 +4353,10 @@ export async function handleIncoming({ instance, webhook }) {
                 ...ctx,
                 message:
                     "❌ Format command tidak valid.\n" +
-                    "Gunakan: cetak [penugasan|bastk|paket] [R2|R4] [slug tenant] [nomor HP matel] [nopol]\n\n" +
-                    "Contoh: cetak paket R4 hsn 085212345678 DA4321BB",
+                    "Gunakan:\n" +
+                    "cetak [penugasan|kuasa|bastk] [R2|R4] [slug tenant] [nomor HP matel] [nopol]\n" +
+                    "cetak paket [tugas|kuasa] [R2|R4] [slug tenant] [nomor HP matel] [nopol]\n\n" +
+                    "Contoh: cetak paket kuasa R4 hsn 085212345678 DA4321BB",
             });
             return;
         }
@@ -4377,6 +4386,7 @@ export async function handleIncoming({ instance, webhook }) {
         try {
             const result = await generateWhatsAppDocument({
                 documentType,
+                bundleLetterType,
                 vehicleType,
                 tenant,
                 matelPhone,
@@ -4388,6 +4398,9 @@ export async function handleIncoming({ instance, webhook }) {
             });
             const branchLabel = branch.name || branch.code || "TIDAK DISET";
             const documentNumber = result.documentNumber ? `\nNomor dokumen: ${result.documentNumber}` : "";
+            const documentLabel = documentType === "paket"
+                ? `PAKET ${(result.bundleLetterType || bundleLetterType || "penugasan").toUpperCase()}`
+                : documentType.toUpperCase();
 
             await sendFileByUpload({
                 idInstance: ctx.idInstance,
@@ -4398,7 +4411,7 @@ export async function handleIncoming({ instance, webhook }) {
                 contentType: result.contentType,
                 caption:
                     "✅ Dokumen berhasil dibuat\n" +
-                    `Jenis: ${documentType.toUpperCase()}\n` +
+                    `Jenis: ${documentLabel}\n` +
                     `Kendaraan: ${vehicleType}\n` +
                     `Tenant: ${tenant}\n` +
                     `Nopol: ${nopol}\n` +

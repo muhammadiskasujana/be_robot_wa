@@ -246,7 +246,7 @@ export function parseCommandV2(text, opts = {})  {
         return { key: "request_lokasi", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
-    // cetak [penugasan|bastk|paket] [R2|R4] [tenant] [nomor HP matel] [nopol]
+    // cetak [penugasan|kuasa|bastk|paket [tugas|kuasa]] [R2|R4] [tenant] [nomor HP matel] [nopol]
     if (first === "cetak" || first.startsWith("cetak ")) {
         const raw = first.replace(/^cetak\s*/i, "").trim();
         return {
