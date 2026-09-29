@@ -25,22 +25,40 @@ function leasingCode(value) {
     return second && !/^\d+$/.test(second) ? `${first}-${second}` : first;
 }
 
+function tenantSlug(value) {
+    return String(value ?? "").trim().toLowerCase();
+}
+
 function inputFilter(meta) {
     const raw = meta?.input_tarikan_filter || meta?.inputTarikanFilter || null;
-    if (!raw) return { mode: "ALL", leasingCodes: [] };
+    if (!raw) return { mode: "ALL", leasingCodes: [], tenantMode: "ALL", tenantSlugs: [] };
     const mode = upper(raw.mode || raw.type || "ALL");
     const source = raw.leasing_codes || raw.leasingCodes || raw.leasing || raw.list || [];
     const leasingCodes = (Array.isArray(source) ? source : String(source).split(","))
         .map(leasingCode)
         .filter(Boolean);
-    return { mode: mode === "ONLY" ? "ONLY" : "ALL", leasingCodes };
+    const tenantSource = raw.tenant_slugs || raw.tenantSlugs || raw.tenants || [];
+    const tenantSlugs = (Array.isArray(tenantSource) ? tenantSource : String(tenantSource).split(","))
+        .map(tenantSlug)
+        .filter(Boolean);
+    const tenantMode = upper(raw.tenant_mode || raw.tenantMode || (tenantSlugs.length ? "ONLY" : "ALL"));
+    return {
+        mode: mode === "ONLY" ? "ONLY" : "ALL",
+        leasingCodes,
+        tenantMode: tenantMode === "ONLY" ? "ONLY" : "ALL",
+        tenantSlugs,
+    };
 }
 
-function accepts(group, payloadLeasingCode) {
+function accepts(group, payloadLeasingCode, payloadTenant) {
     const filter = inputFilter(group.meta || {});
-    if (filter.mode === "ALL") return true;
-    const normalized = leasingCode(payloadLeasingCode);
-    return Boolean(normalized) && filter.leasingCodes.includes(normalized);
+    const leasingAccepted = filter.mode === "ALL" || (
+        Boolean(leasingCode(payloadLeasingCode)) && filter.leasingCodes.includes(leasingCode(payloadLeasingCode))
+    );
+    const tenantAccepted = filter.tenantMode === "ALL" || (
+        Boolean(tenantSlug(payloadTenant)) && filter.tenantSlugs.includes(tenantSlug(payloadTenant))
+    );
+    return leasingAccepted && tenantAccepted;
 }
 
 export const worker = new Worker(
@@ -66,7 +84,7 @@ export const worker = new Worker(
 
         const selected = groups.filter((group) =>
             targets(group.manage_target).includes("INPUT_TARIKAN") &&
-            accepts(group, payload.leasing_code)
+            accepts(group, payload.leasing_code, payload.tenant)
         );
 
         const jobs = selected.map((group) => {
@@ -96,6 +114,7 @@ export const worker = new Worker(
             ok: true,
             fanout: jobs.length,
             leasing_code: payload.leasing_code || null,
+            tenant: payload.tenant || null,
             event_id: payload.event_id,
         };
     },

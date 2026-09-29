@@ -27,6 +27,11 @@ test("recognizes incomplete cetak command so the handler can return format help"
 test("parses input tarikan management configuration commands", () => {
     assert.equal(parseCommandV2("set input tarikan all").key, "set_input_tarikan");
     assert.deepEqual(parseCommandV2("set input tarikan leasing FIF, BFI").args, ["leasing fif, bfi"]);
+    assert.deepEqual(parseCommandV2("set input tarikan tenant hsn").args, ["tenant hsn"]);
+    assert.deepEqual(
+        parseCommandV2("set input tarikan leasing FIF, BFI tenant hsn" ).args,
+        ["leasing fif, bfi tenant hsn"]
+    );
     assert.equal(parseCommandV2("status input tarikan").key, "status_input_tarikan");
     assert.equal(parseCommandV2("unset input tarikan").key, "unset_input_tarikan");
 });

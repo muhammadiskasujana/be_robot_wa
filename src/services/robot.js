@@ -712,12 +712,35 @@ async function setManageTarget(group, targetRaw) {
 
 function parseInputTarikanSetting(rawValue = "") {
     const raw = String(rawValue || "").trim();
-    const normalized = raw.toUpperCase().replace(/\s+/g, " ");
-    if (normalized.startsWith("ALL") || ["FINANCE", "LEASING"].includes(normalized)) {
-        return { ok: true, filter: { mode: "ALL", leasing_codes: [] } };
+    const tenantMatch = raw.match(/(?:^|\s)(?:tenant|pt)\s+(.+)$/i);
+    const leasingRaw = tenantMatch ? raw.slice(0, tenantMatch.index).trim() : raw;
+    const tenantRaw = tenantMatch?.[1]?.trim() || "";
+    const tenantSlugs = tenantRaw
+        .split(/[,|;\n]+/)
+        .map((value) => value.trim().toLowerCase())
+        .filter(Boolean)
+        .filter((value, index, values) => values.indexOf(value) === index);
+
+    if (tenantSlugs.some((value) => !/^[a-z0-9][a-z0-9_-]*$/.test(value))) {
+        return { ok: false, error: "Slug tenant tidak valid. Contoh: set input tarikan tenant hsn, pt-bintang" };
     }
 
-    const withoutPrefix = raw.replace(/^(only\s+)?(finance|leasing)\s*/i, "").trim();
+    const tenantFilter = {
+        tenant_mode: tenantSlugs.length ? "ONLY" : "ALL",
+        tenant_slugs: tenantSlugs,
+    };
+    const normalized = leasingRaw.toUpperCase().replace(/\s+/g, " ");
+    if (!normalized || normalized === "ALL" || ["FINANCE", "LEASING"].includes(normalized)) {
+        if (!tenantSlugs.length && !normalized) {
+            return {
+                ok: false,
+                error: "Format: set input tarikan all, tenant hsn, atau leasing FIF, BFI tenant hsn",
+            };
+        }
+        return { ok: true, filter: { mode: "ALL", leasing_codes: [], ...tenantFilter } };
+    }
+
+    const withoutPrefix = leasingRaw.replace(/^(only\s+)?(finance|leasing)\s*/i, "").trim();
     const leasingCodes = withoutPrefix
         .split(/[,|;\n]+/)
         .map((value) => {
@@ -730,9 +753,22 @@ function parseInputTarikanSetting(rawValue = "") {
         .filter((value, index, values) => values.indexOf(value) === index);
 
     if (!leasingCodes.length) {
-        return { ok: false, error: "Format: set input tarikan all, atau set input tarikan leasing FIF, BFI" };
+        return { ok: false, error: "Format: set input tarikan all, tenant hsn, atau leasing FIF, BFI tenant hsn" };
     }
-    return { ok: true, filter: { mode: "ONLY", leasing_codes: leasingCodes } };
+    return { ok: true, filter: { mode: "ONLY", leasing_codes: leasingCodes, ...tenantFilter } };
+}
+
+function describeInputTarikanFilter(filter = {}) {
+    const parts = [];
+    const leasingMode = String(filter.mode || "ALL").toUpperCase();
+    const tenantMode = String(filter.tenant_mode || "ALL").toUpperCase();
+    parts.push(leasingMode === "ONLY"
+        ? `Leasing: ${(filter.leasing_codes || []).join(", ") || "-"}`
+        : "Semua finance/leasing");
+    parts.push(tenantMode === "ONLY"
+        ? `Tenant/PT: ${(filter.tenant_slugs || []).join(", ") || "-"}`
+        : "Semua tenant/PT");
+    return parts.join("\n");
 }
 
 async function configureInputTarikan(group, rawValue) {
@@ -2336,9 +2372,7 @@ export async function handleIncoming({ instance, webhook }) {
             await sendText({ ...ctx, message: `❌ ${result.error}` });
             return;
         }
-        const detail = result.filter.mode === "ALL"
-            ? "Semua finance/leasing"
-            : `Leasing: ${result.filter.leasing_codes.join(", ")}`;
+        const detail = describeInputTarikanFilter(result.filter);
         await sendText({ ...ctx, message: `✅ Notifikasi input tarikan aktif.\nFilter: ${detail}` });
         return;
     }
@@ -2346,9 +2380,7 @@ export async function handleIncoming({ instance, webhook }) {
     if (key === "status_input_tarikan") {
         const enabled = normTargets(group.manage_target).includes("INPUT_TARIKAN");
         const filter = group.meta?.input_tarikan_filter || { mode: "ALL", leasing_codes: [] };
-        const detail = String(filter.mode || "ALL").toUpperCase() === "ONLY"
-            ? `Leasing: ${(filter.leasing_codes || []).join(", ") || "-"}`
-            : "Semua finance/leasing";
+        const detail = describeInputTarikanFilter(filter);
         await sendText({
             ...ctx,
             message: enabled
