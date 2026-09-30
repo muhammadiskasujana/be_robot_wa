@@ -17,7 +17,7 @@ export async function fetchAccessStatPng({
   const res = await axios.get(url, {
     params: { leasing, cabang, year, month, day, start, end },
     responseType: "arraybuffer",
-    timeout: 100000,
+    timeout: 180000,
     validateStatus: () => true,
   });
 
