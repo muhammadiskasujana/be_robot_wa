@@ -1,3 +1,12 @@
+export function commandRequestError(error) {
+    const response = error.response;
+    if (!response) return error.message;
+    const code = typeof response.data?.error === "string" ? response.data.error : "gateway_error";
+    const details = response.data?.details;
+    const connection = details ? `; hasClient=${Boolean(details.hasClient)}; connectionState=${details.connectionState}; socketOpen=${Boolean(details.socketOpen)}` : "";
+    return `${error.message}: ${code}${connection}`;
+}
+
 export function createCommandProcessor({ events, instances, config, execution, handleIncoming, gatewayRequest, pause }) {
     return async function processEvent(job) {
         const row = await events.findByPk(job.data.eventId);
@@ -39,7 +48,7 @@ export function createCommandProcessor({ events, instances, config, execution, h
             await pause(Number(process.env.WA_COMMAND_SEND_INTERVAL_MS || 1000));
         } catch (error) {
             const definitelyUnsent = error.response?.status === 503 && error.response?.data?.error === "SESSION_NOT_CONNECTED";
-            await row.update({ status: definitelyUnsent ? "failed" : "unknown", error: error.message });
+            await row.update({ status: definitelyUnsent ? "failed" : "unknown", error: commandRequestError(error) });
             throw error;
         }
     };

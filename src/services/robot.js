@@ -2084,7 +2084,7 @@ export async function handleIncoming({ instance, webhook }) {
         }
 
         const targetUrl = `https://api.digitalmanager.id/api/list/cabang?leasing=${encodeURIComponent(leasingCode)}`;
-        const { token } = createTempLink(targetUrl, 5 * 60 * 1000);
+        const { token } = await createTempLink(targetUrl, 5 * 60 * 1000);
         const link = `${PUBLIC_BASE}/api/temp/temp-links/${token}`;
 
         await sendText({

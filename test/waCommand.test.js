@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { commandConfig, commandShard } from "../src/services/waCommandConfig.js";
-import { createCommandProcessor } from "../src/services/waCommandProcessor.js";
+import { createCommandProcessor, commandRequestError } from "../src/services/waCommandProcessor.js";
 import { commandExecution } from "../src/services/waCommandExecution.js";
 import { normalizePhone } from "../src/services/parser.js";
 
@@ -25,6 +25,15 @@ test("phone normalization removes device suffix and never interprets LID as a ph
     assert.equal(normalizePhone("628123@c.us"), "628123");
     assert.equal(normalizePhone("123456789@lid"), "");
     assert.equal(normalizePhone("12001@g.us"), "");
+});
+
+test("gateway errors preserve safe connection diagnostics without exposing tokens", () => {
+    const error = new Error("Request failed with status code 503");
+    error.response = { status: 503, data: { error: "SESSION_NOT_CONNECTED", details: {
+        hasClient: true, connectionState: "connected", socketOpen: false,
+    }, apiToken: "never-log-this" } };
+    assert.equal(commandRequestError(error), "Request failed with status code 503: SESSION_NOT_CONNECTED; hasClient=true; connectionState=connected; socketOpen=false");
+    assert.equal(commandRequestError(new Error("timeout")), "timeout");
 });
 
 function setup(overrides = {}) {
