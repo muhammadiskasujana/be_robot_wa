@@ -1,5 +1,6 @@
 // src/services/billingService.js
 import Sequelize from "sequelize";
+import { commandExecution } from "./waCommandExecution.js";
 
 import {
     WaCommand,
@@ -451,7 +452,9 @@ export async function checkAndDebit({
         }
     }
 
-    const refId = ref_id || webhook?.idMessage || null;
+    const execution = commandExecution.getStore();
+    const refId = execution ? `command-${execution.id}` : (ref_id || webhook?.idMessage || null);
+    const refType = execution ? "WA_COMMAND_EVENT" : ref_type;
 
     try {
         const out = await sequelize.transaction(async (t) => {
@@ -459,6 +462,12 @@ export async function checkAndDebit({
 
             // lock by PK (paling aman)
             const wallet = await WaCreditWallet.findByPk(wallet0.id, { transaction: t, lock: t.LOCK.UPDATE });
+            if (execution) {
+                const previous = await WaCreditTransaction.findOne({ where: {
+                    wallet_id: wallet.id, command_id: pol.command_id, tx_type: "DEBIT", ref_type: refType, ref_id: refId,
+                }, transaction: t });
+                if (previous) return { allowed: true, charged: false, balance_after: toInt(wallet.balance, 0) };
+            }
             if (!wallet.is_active) throw new Error("Wallet nonaktif");
 
             const before = toInt(wallet.balance, 0);
@@ -485,7 +494,7 @@ export async function checkAndDebit({
                     group_id: wallet.group_id || group.id || null,
                     leasing_id: wallet.leasing_id || group.leasing_id || null,
                     phone_e164: wallet.phone_e164 || phone_e164 || null,
-                    ref_type,
+                    ref_type: refType,
                     ref_id: refId,
                     notes: notes || commandKey,
                 },
@@ -517,7 +526,7 @@ export async function checkAndDebit({
         return {
             ok: true,
             allowed: true,
-            charged: true,
+            charged: out.charged,
             billing_mode: "CREDIT",
             policy: pol,
             credit_cost: cost,

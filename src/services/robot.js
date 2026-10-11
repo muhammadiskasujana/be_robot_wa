@@ -12,7 +12,7 @@ import {
     WaDeleteHistory,
 } from "../models/index.js";
 import crypto from "crypto";
-import { sendFileByUpload, sendText } from "./greenapi.js";
+import { sendFileByUpload, sendText } from "./waCommandTransport.js";
 import { fetchAccessReportXlsx } from "./tarikreport/reportsAccess.js";
 import { fetchRekapDataXlsx } from "./rekapJumlahData/fetchRekapDataXlsx.js";
 import {listSftpFiles, downloadSftpFileXlsx, vpnStatus, vpnUp} from "./sftp/sftpFiles.js";

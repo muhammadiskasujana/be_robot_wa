@@ -19,7 +19,8 @@ export function extractText(webhook) {
 
 export function normalizePhone(senderJid = "") {
     // contoh senderJid: "62812xxxx@c.us" atau "+62812..."
-    const raw = String(senderJid).replace(/@c\.us|@g\.us/g, "");
+    if (String(senderJid).endsWith("@lid") || String(senderJid).endsWith("@g.us")) return "";
+    const raw = String(senderJid).split("@")[0].split(":")[0];
     const digits = raw.replace(/[^\d]/g, "");
     if (!digits) return "";
     // kamu bisa pakai aturan e164 yang kamu pakai sebelumnya

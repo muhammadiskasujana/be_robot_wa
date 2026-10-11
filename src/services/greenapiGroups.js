@@ -1,4 +1,6 @@
 import { fetchJson, fetchString, TTL, CacheKeys } from "./cacheService.js";
+import { commandConfig } from "./waCommandConfig.js";
+import { gatewayRequest } from "./waCommandTransport.js";
 
 // ===== util timeout fetch =====
 async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
@@ -29,13 +31,12 @@ function senderCandidates(senderJid = "") {
     if (server) out.add(`${noDevice}@${server}`);
 
     // GreenAPI participant id biasanya "@c.us" atau "lid"
-    if (digits) {
+    if (digits && server !== "lid") {
         let phone = digits;
         if (phone.startsWith("0")) phone = "62" + phone.slice(1);
         if (phone.startsWith("8")) phone = "62" + phone;
 
         out.add(`${phone}@c.us`);
-        out.add(`${phone}@lid`);
         out.add(`${phone}@s.whatsapp.net`);
     }
 
@@ -75,12 +76,13 @@ export async function greenapiGetGroupData({ idInstance, apiToken, groupId }) {
  * Disimpan cache per group chatId.
  */
 export async function getGroupAdminsCached({ ctx, groupChatId }) {
-    const key = CacheKeys.groupAdmins(groupChatId);
+    const config = commandConfig();
+    const key = `${CacheKeys.groupAdmins(groupChatId)}:${config.provider}:${config.provider === "baileys" ? config.sessionId : ctx.idInstance}`;
 
     return fetchJson(
         key,
         async () => {
-            const data = await greenapiGetGroupData({
+            const data = config.provider === "baileys" ? await gatewayRequest("group", { group_id: groupChatId }) : await greenapiGetGroupData({
                 idInstance: ctx.idInstance,
                 apiToken: ctx.apiToken,
                 groupId: groupChatId,

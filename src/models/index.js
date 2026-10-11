@@ -2,6 +2,7 @@ import Sequelize from "sequelize";
 import sequelize from "../config/sequelize.js";
 
 import WaInstanceDef from "./WaInstance.js";
+import WaCommandEventDef from "./WaCommandEvent.js";
 import WaMessageLogDef from "./WaMessageLog.js";
 import WaPrivateWhitelistDef from "./WaPrivateWhitelist.js";
 import WaMasterDef from "./WaMaster.js";
@@ -34,6 +35,7 @@ export const AdminUser = AdminUserDef(sequelize, DataTypes);
 export const AdminRefreshToken = AdminRefreshTokenDef(sequelize, DataTypes);
 
 export const WaInstance = WaInstanceDef(sequelize, DataTypes);
+export const WaCommandEvent = WaCommandEventDef(sequelize, DataTypes);
 export const WaMessageLog = WaMessageLogDef(sequelize, DataTypes);
 
 export const WaPrivateWhitelist = WaPrivateWhitelistDef(sequelize, DataTypes);

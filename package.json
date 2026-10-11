@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test",
-    "dev": "node src/server.js"
+    "dev": "node src/server.js",
+    "worker:command": "node src/workers/waCommand.worker.js",
+    "migrate:command": "node scripts/migrateWaCommand.js"
   },
   "keywords": [],
   "author": "",

@@ -1,173 +1,86 @@
-import express from "express";
-import { WaInstance, WaMessageLog } from "../models/index.js";
-import { handleIncoming } from "../services/robot.js";
-
-import { fetchJson, TTL, CacheKeys } from "../services/cacheService.js";
-import { Op } from "sequelize";
-import Sequelize from "sequelize";
-
-async function getWaInstanceCached(idInstance) {
-    return fetchJson(
-        CacheKeys.waInstance(idInstance),
-        async () => {
-            const instance = await WaInstance.findOne({
-                where: {
-                    id_instance: idInstance,
-                    is_active: true,
-                    [Op.and]: [Sequelize.literal(`(meta->'roles') @> '["BOT"]'::jsonb`)],
-                },
-                attributes: ["id_instance", "api_token", "meta"],
-            });
-            return instance ? instance.toJSON() : null;
-        },
-        TTL.INSTANCE
-    );
-}
-
+import express from 'express';
+import { timingSafeEqual } from 'node:crypto';
+import { WaInstance, WaMessageLog, WaCommandEvent } from '../models/index.js';
+import { commandConfig } from '../services/waCommandConfig.js';
 const router = express.Router();
-
-function verifySecret(req) {
-    const need = process.env.WEBHOOK_SECRET;
-    if (!need) return true;
-    return req.query.secret === need;
+function matchesSecret(actual, expected) {
+    if (!expected || typeof actual !== 'string') return false;
+    const a = Buffer.from(actual), b = Buffer.from(expected);
+    return a.length === b.length && timingSafeEqual(a, b);
 }
-
-function pickChatId(body) {
-    return (
-        body?.senderData?.chatId ||
-        body?.destinationData?.chatId ||
-        body?.destinationData?.chatId || // keep
-        body?.destinationData?.to ||      // kadang di sini
-        body?.destinationData?.recipientId ||
-        body?.chatId ||
-        body?.messageData?.chatId ||
-        null
-    );
+async function saveIncoming(provider, instanceKey, body) {
+    const [row, created] = await WaCommandEvent.findOrCreate({
+        where: { event_key: `${provider}:${instanceKey}:${body.idMessage}` },
+        defaults: { direction: 'in', provider, instance_key: String(instanceKey),
+            chat_id: body.senderData.chatId, payload: body },
+    });
+    return { ok: true, accepted: true, duplicate: !created, eventId: row.id };
 }
-
-function pickSender(body) {
-    return body?.senderData?.sender || body?.senderData?.from || null;
-}
-
-function buildSlimWebhook(body) {
-    const typeWebhook = body?.typeWebhook || null;
-
-    const status =
-        body?.status ||
-        body?.messageData?.statusMessage ||
-        body?.messageData?.status ||
-        body?.state ||
-        null;
-
-    const statusReason =
-        body?.reason ||
-        body?.statusReason ||
-        body?.error ||
-        body?.errorDescription ||
-        body?.message ||
-        body?.description ||
-        body?.messageData?.error ||
-        body?.messageData?.errorMessage ||
-        body?.messageData?.statusReason ||
-        body?.messageData?.reason ||
-        body?.messageData?.message ||
-        body?.messageData?.description ||
-        body?.notificationData?.error ||
-        body?.notificationData?.description ||
-        null;
-
-    return {
-        typeWebhook,
-        idMessage: body?.idMessage || null,
-        timestamp: body?.timestamp || null,
-        idInstance: body?.instanceData?.idInstance || null,
-
-        chatId: pickChatId(body),
-        // outgoing biasanya ga punya sender, jadi aman null
-        sender: body?.senderData?.sender || null,
-        chatName: body?.senderData?.chatName || body?.destinationData?.chatName || null,
-
-        typeMessage: body?.messageData?.typeMessage || null,
-
-        status,
-        statusReason,
-
-        // simpan potongan destinationData untuk debug
-        destination: body?.destinationData
-            ? {
-                chatId: body.destinationData.chatId || null,
-                to: body.destinationData.to || null,
-                recipientId: body.destinationData.recipientId || null,
-            }
-            : null,
+async function logGreen(instanceKey, body) {
+    const slim = {
+        typeWebhook: body.typeWebhook, idMessage: body.idMessage, timestamp: body.timestamp,
+        idInstance: instanceKey, chatId: body.chatId || body.senderData?.chatId || body.destinationData?.chatId || null,
+        sender: body.senderData?.sender || null, chatName: body.senderData?.chatName || body.destinationData?.chatName || null,
+        typeMessage: body.messageData?.typeMessage || null, status: body.status || null,
+        statusReason: body.reason || body.error || body.errorDescription || null,
     };
-}
-
-router.post("/greenapi", async (req, res) => {
     try {
-        if (!verifySecret(req)) return res.status(401).json({ ok: false, error: "invalid secret" });
-
+        await WaMessageLog.findOrCreate({ where: { id_instance: instanceKey, id_message: body.idMessage }, defaults: {
+            chat_id: slim.chatId, sender: slim.sender, type_webhook: slim.typeWebhook, type_message: slim.typeMessage, body: slim,
+        } });
+    } catch (error) { console.error('[WA log]', error.message); }
+}
+router.post('/greenapi', async (req, res) => {
+    try {
+        const secret = process.env.WEBHOOK_SECRET;
+        if (secret && !matchesSecret(req.query.secret, secret)) return res.status(401).json({ ok: false });
+        if (commandConfig().provider !== 'greenapi') return res.json({ ok: true, ignored: 'inactive_provider' });
         const body = req.body || {};
-        const type = body?.typeWebhook;
-
-        const idInstance = Number(body?.instanceData?.idInstance);
-        const idMessage = body?.idMessage;
-
-        // ✅ ACK cepat untuk SEMUA webhook supaya GreenAPI tidak retry
-        res.json({ ok: true, accepted: true });
-
-        // ==== proses background ====
-        (async () => {
-            if (!idInstance || !idMessage) return;
-
-            const slimBody = buildSlimWebhook(body);
-
-            // Simpan semua webhook (incoming + outgoing) agar bisa trace delivery
-            try {
-                await WaMessageLog.create({
-                    id_instance: idInstance,
-                    id_message: idMessage,
-                    chat_id: slimBody.chatId,
-                    sender: slimBody.sender,
-                    type_webhook: slimBody.typeWebhook,
-                    type_message: slimBody.typeMessage,
-                    body: slimBody,
-                });
-            } catch (e) {
-                // duplicate -> skip
-            }
-
-            // ====== INCOMING saja yang diproses bot ======
-            if (type === "incomingMessageReceived") {
-                const instance = await getWaInstanceCached(idInstance);
-                if (!instance?.id_instance || !instance?.api_token) return;
-
-                await handleIncoming({
-                    instance: { id_instance: instance.id_instance, api_token: instance.api_token },
-                    webhook: body,
-                });
-                return;
-            }
-
-            // ====== OUTGOING status: log untuk debug ======
-            if (type === "outgoingMessageStatus" || type === "outgoingAPIMessageReceived") {
-                console.log("[GREENAPI OUTGOING]", {
-                    idInstance,
-                    idMessage,
-                    chatId: slimBody.chatId,
-                    status: slimBody.status,
-                    reason: slimBody.statusReason,
-                    destination: slimBody.destination,
-                    keys: Object.keys(body || {}),
-                    messageDataKeys: Object.keys(body?.messageData || {}),
-                });
-            }
-        })().catch((err) => console.error("BG webhook error:", err?.message || err));
-    } catch (err) {
-        console.error("Webhook error:", err?.message || err);
-        // tetap 200 agar ga retry spam
-        return res.status(200).json({ ok: false, error: "handled" });
+        const instanceKey = String(body.instanceData?.idInstance || '');
+        if (!/^\d+$/.test(instanceKey) || !body.idMessage) return res.json({ ok: true, ignored: 'not_message' });
+        if (body.typeWebhook !== 'incomingMessageReceived') {
+            // Persist status events independently of incoming message deduplication.
+            const key = `greenapi:${instanceKey}:${body.idMessage}:${body.typeWebhook}:${body.status || ''}`;
+            await WaCommandEvent.findOrCreate({ where: { event_key: key }, defaults: {
+                direction: 'status', provider: 'greenapi', instance_key: instanceKey,
+                chat_id: body.chatId || body.senderData?.chatId || body.destinationData?.chatId || '',
+                status: 'done', payload: body,
+            } });
+            await logGreen(instanceKey, body);
+            return res.json({ ok: true });
+        }
+        if (!body.senderData?.chatId || !body.senderData?.sender) return res.status(400).json({ ok: false, error: 'missing sender' });
+        const instance = await WaInstance.findOne({ where: { id_instance: instanceKey, is_active: true } });
+        if (!instance?.api_token || !instance.meta?.roles?.includes('BOT')) return res.json({ ok: true, ignored: 'inactive_instance' });
+        const result = await saveIncoming('greenapi', instanceKey, body);
+        // Retain existing admin message history, but command dedup lives in wa_command_events.
+        await logGreen(instanceKey, body);
+        return res.json(result);
+    } catch (error) {
+        console.error('[command webhook]', error.message);
+        return res.status(503).json({ ok: false, error: 'Unable to persist incoming message' });
     }
 });
-
+router.post('/gateway', async (req, res) => {
+    try {
+        const c = commandConfig();
+        if (!matchesSecret(req.headers['x-command-secret'], process.env.WA_COMMAND_GATEWAY_WEBHOOK_SECRET)) return res.status(401).json({ ok: false });
+        if (c.provider !== 'baileys') return res.json({ ok: true, ignored: 'inactive_provider' });
+        const { session_id, tenant, webhook: body } = req.body || {};
+        if (session_id !== c.sessionId || tenant !== c.tenant) return res.status(403).json({ ok: false, error: 'wrong command session/tenant' });
+        if (!body?.idMessage) return res.status(400).json({ ok: false, error: 'missing message ID' });
+        if (body.typeWebhook !== 'incomingMessageReceived') {
+            await WaCommandEvent.findOrCreate({ where: { event_key: `baileys:${session_id}:${body.idMessage}:${body.status}` }, defaults: {
+                direction: 'status', provider: 'baileys', instance_key: session_id,
+                chat_id: body.chatId || '', status: 'done', payload: body,
+            } });
+            return res.json({ ok: true });
+        }
+        if (!body.senderData?.chatId || !body.senderData?.sender) return res.status(400).json({ ok: false, error: 'missing sender' });
+        return res.json(await saveIncoming('baileys', session_id, body));
+    } catch (error) {
+        console.error('[gateway webhook]', error.message);
+        return res.status(503).json({ ok: false, error: 'Unable to persist incoming message' });
+    }
+});
 export default router;
