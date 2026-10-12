@@ -247,6 +247,14 @@ export function parseCommandV2(text, opts = {})  {
         return { key: "request_lokasi", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
+    if (first === "cetak hispay" || first.startsWith("cetak hispay ")) {
+        return {
+            key: "cetak_hispay",
+            args: first.replace(/^cetak\s+hispay\s*/i, "").split(/\s+/).filter(Boolean),
+            argsLines: lines.slice(1),
+        };
+    }
+
     // cetak [penugasan|kuasa|bastk|paket [tugas|kuasa]] [R2|R4] [tenant] [nomor HP matel] [nopol]
     if (first === "cetak" || first.startsWith("cetak ")) {
         const raw = first.replace(/^cetak\s*/i, "").trim();

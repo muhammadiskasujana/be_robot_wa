@@ -51,6 +51,7 @@ import {deleteLeasingUser} from "./registerWebLeasing/deleteLeasingUser.js";
 import {formatRequestLokasiMessage, parseRequestLokasiInput, requestLokasiTerbaru} from "./lokasi/requestLokasi.js";
 import {fetchUsersReportXlsx} from "./tarikreport/fetchUsersReportXlsx.js";
 import {guardFeature} from "./middleware/cekFitur.js";
+import { fetchKartuPiutangDocument, normalizePiutangIdentifier } from "./kartuPiutang/kartuPiutangService.js";
 import {
     generateWhatsAppDocument,
 } from "./cetakSurat/cetakSuratService.js";
@@ -4326,7 +4327,22 @@ export async function handleIncoming({ instance, webhook }) {
         return;
     }
 
-    if (key === "cetak_surat") {
+    if (key === "cetak_surat" || key === "cetak_hispay") {
+        const isHispay = key === "cetak_hispay";
+        let identifier = "";
+        if (isHispay) {
+            try {
+                if (!args?.length || argsLines?.length) throw new Error("Format tidak valid.");
+                identifier = normalizePiutangIdentifier(args.join(" "));
+                // Multiple tokens are allowed only for a plate written with spaces.
+                if (args.length > 1 && !/^[A-Z]{1,2}\s+\d{1,4}(?:\s+[A-Z]{1,3})?$/.test(args.join(" ").toUpperCase())) {
+                    throw new Error("Masukkan satu identitas kendaraan atau nomor kontrak.");
+                }
+            } catch {
+                await sendText({ ...ctx, message: "❌ Format command tidak valid.\nGunakan: cetak hispay {nopol/noka/nosin/nokontrak}\nContoh: cetak hispay 740010058091" });
+                return;
+            }
+        }
         const commandArgs = [...(args || [])];
         const documentTypeRaw = commandArgs.shift();
         const documentType = String(documentTypeRaw || "").toLowerCase();
@@ -4341,14 +4357,14 @@ export async function handleIncoming({ instance, webhook }) {
         const matelPhone = normalizePhone62(matelPhoneRaw);
         const nopol = normPlate(nopolRaw);
 
-        if (
+        if (!isHispay && (
             !["penugasan", "kuasa", "bastk", "paket"].includes(documentType) ||
             !["R2", "R4"].includes(vehicleType) ||
             !/^[a-z0-9][a-z0-9_-]*$/.test(tenant) ||
             !matelPhone ||
             !nopol ||
             extra.length
-        ) {
+        )) {
             await sendText({
                 ...ctx,
                 message:
@@ -4384,6 +4400,20 @@ export async function handleIncoming({ instance, webhook }) {
         await sendText({ ...ctx, message: "⏳ Dokumen sedang dibuat. Hasil akan dikirim ke chat pribadi." });
 
         try {
+            if (isHispay) {
+                const result = await fetchKartuPiutangDocument({ identifier });
+                await sendFileByUpload({
+                    idInstance: ctx.idInstance,
+                    apiToken: ctx.apiToken,
+                    chatId: personalChatId,
+                    buffer: result.buffer,
+                    filename: result.filename,
+                    contentType: result.contentType,
+                    caption: `✅ Kartu piutang\nPencarian: ${identifier}\nLeasing: ${leasingRow.name || leasingRow.code}\nCabang: ${branch.name || branch.code || "TIDAK DISET"}`,
+                });
+                await sendText({ ...ctx, message: "✅ Kartu piutang berhasil dikirim langsung ke chat pribadi." });
+                return;
+            }
             const result = await generateWhatsAppDocument({
                 documentType,
                 bundleLetterType,

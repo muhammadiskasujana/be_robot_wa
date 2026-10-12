@@ -8,7 +8,8 @@ module.exports = {
         (gen_random_uuid(), 'cek_nopol', 'Cek Nopol', 'Cek data kendaraan berdasarkan nopol. Contoh: cek nopol AB1234CD', 'GROUP', false, true, true, now(), now()),
         (gen_random_uuid(), 'history', 'History', 'Ambil history berdasarkan nopol. Contoh: history AB1234CD', 'GROUP', false, true, true, now(), now()),
         (gen_random_uuid(), 'request_lokasi', 'Request Lokasi', 'Request lokasi ke nomor. Contoh: request lokasi 08123456789', 'GROUP', false, true, true, now(), now()),
-        (gen_random_uuid(), 'cetak_surat', 'Cetak Surat', 'Cetak penugasan, BASTK, atau paket ke chat pribadi', 'GROUP', false, true, true, now(), now())
+        (gen_random_uuid(), 'cetak_surat', 'Cetak Surat', 'Cetak penugasan, BASTK, atau paket ke chat pribadi', 'GROUP', false, true, true, now(), now()),
+        (gen_random_uuid(), 'cetak_hispay', 'Kartu Piutang', 'Cetak kartu piutang ke chat pribadi. Contoh: cetak hispay 740010058091', 'GROUP', false, true, true, now(), now())
       ON CONFLICT (key)
       DO UPDATE SET
         name = EXCLUDED.name,
@@ -23,7 +24,7 @@ module.exports = {
 
     async down(queryInterface) {
         await queryInterface.bulkDelete("wa_commands", {
-            key: ["cek_nopol", "history", "request_lokasi", "cetak_surat"],
+            key: ["cek_nopol", "history", "request_lokasi", "cetak_surat", "cetak_hispay"],
         });
     },
 };

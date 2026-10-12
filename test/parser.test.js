@@ -2,6 +2,16 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { parseCommandV2 } from "../src/services/parser.js";
 
+test("routes kartu piutang separately from surat", () => {
+    for (const identifier of ["740010058091", "DA4321BB", "MH123456789", "ENG123456"]) {
+        assert.deepEqual(parseCommandV2(`Cetak HISPay ${identifier}`), {
+            key: "cetak_hispay", args: [identifier.toLowerCase()], argsLines: [],
+        });
+    }
+    assert.deepEqual(parseCommandV2("cetak hispay"), { key: "cetak_hispay", args: [], argsLines: [] });
+    assert.deepEqual(parseCommandV2("cetak hispay DA 4321 BB").args, ["da", "4321", "bb"]);
+});
+
 test("parses cetak surat command with tenant slug without changing normalized command behavior", () => {
     assert.deepEqual(parseCommandV2("cetak paket R4 hsn 085212345678 DA4321BB"), {
         key: "cetak_surat",
