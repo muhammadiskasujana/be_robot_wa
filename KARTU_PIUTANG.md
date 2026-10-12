@@ -1,8 +1,8 @@
 # Kartu piutang
 
-Command dari grup WhatsApp: `cetak hispay {nopol/noka/nosin/nokontrak}`.
+Command dari grup WhatsApp: `hispay {nopol/noka/nosin/nokontrak}`.
 
-Contoh: `cetak hispay 740010058091` atau `cetak hispay DA4321BB`. Nopol dengan spasi, seperti `cetak hispay DA 4321 BB`, juga diterima.
+Contoh: `hispay 740010058091` atau `hispay DA4321BB`. Nopol dengan spasi, seperti `hispay DA 4321 BB`, juga diterima.
 
 Persiapan mengikuti cetak surat kuasa: leasing grup wajib diset dan aktif, cabang aktif dari grup digunakan bila tersedia. Dokumen dikirim langsung ke chat pribadi pengirim melalui transport WhatsApp yang sedang digunakan (Green API atau gateway Baileys).
 

@@ -7,7 +7,7 @@ module.exports = {
                 (id, key, name, description, scope, requires_master, allow_all_modes, is_active, created_at, updated_at)
             VALUES
                 (gen_random_uuid(), 'cetak_hispay', 'Kartu Piutang',
-                 'Cetak kartu piutang ke chat pribadi. Contoh: cetak hispay 740010058091',
+                 'Cetak kartu piutang ke chat pribadi. Contoh: hispay 740010058091',
                  'GROUP', false, true, true, now(), now())
             ON CONFLICT (key)
             DO UPDATE SET

@@ -247,10 +247,10 @@ export function parseCommandV2(text, opts = {})  {
         return { key: "request_lokasi", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
-    if (first === "cetak hispay" || first.startsWith("cetak hispay ")) {
+    if (first === "hispay" || first.startsWith("hispay ")) {
         return {
             key: "cetak_hispay",
-            args: first.replace(/^cetak\s+hispay\s*/i, "").split(/\s+/).filter(Boolean),
+            args: first.replace(/^hispay\s*/i, "").split(/\s+/).filter(Boolean),
             argsLines: lines.slice(1),
         };
     }

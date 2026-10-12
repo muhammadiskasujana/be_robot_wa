@@ -4339,7 +4339,7 @@ export async function handleIncoming({ instance, webhook }) {
                     throw new Error("Masukkan satu identitas kendaraan atau nomor kontrak.");
                 }
             } catch {
-                await sendText({ ...ctx, message: "❌ Format command tidak valid.\nGunakan: cetak hispay {nopol/noka/nosin/nokontrak}\nContoh: cetak hispay 740010058091" });
+                await sendText({ ...ctx, message: "❌ Format command tidak valid.\nGunakan: hispay {nopol/noka/nosin/nokontrak}\nContoh: hispay 740010058091" });
                 return;
             }
         }
