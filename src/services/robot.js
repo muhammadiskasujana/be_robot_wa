@@ -3495,9 +3495,7 @@ export async function handleIncoming({ instance, webhook }) {
                     const msg = (
                         `*HISTORY NOPOL ${plate}*\n` +
                         `*================*\n` +
-                        `⚠️ Data ditemukan, tetapi bukan untuk leasing ini.\n` +
-                        `Leasing data: *${dataLeasingUp}*\n` +
-                        `Leasing group: *${groupLeasingUp}*`
+                        `⚠️ Data ditemukan, tetapi bukan di leasing ini.`
                     ).trim();
 
                     return { text: msg, chargeable: false };
