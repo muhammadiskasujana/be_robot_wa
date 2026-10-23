@@ -1,6 +1,6 @@
 # Session AI WhatsApp
 
-Jalankan migrasi `20261023_000001_group_ai.cjs` dan worker `npm run worker:ai` terpisah dari `npm run worker:command`.
+Jalankan migrasi `npm run migrate:ai` sekali dan worker `npm run worker:ai` terpisah dari `npm run worker:command`.
 
 Gateway Baileys menggunakan kontrak command yang sudah ada. Daftarkan session AI tersendiri dengan callback `POST /webhook/gateway/ai` dan header `X-Command-Secret`. Tidak ada perubahan kode gateway. Session ini harus berbeda dari `WA_COMMAND_GATEWAY_SESSION_ID` dan session notifikasi.
 
