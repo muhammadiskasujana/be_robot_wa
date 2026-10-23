@@ -2,6 +2,7 @@ import express from "express";
 import { timingSafeEqual } from "node:crypto";
 import { WaInstance, WaMessageLog, WaCommandEvent } from "../models/index.js";
 import { commandConfig } from "../services/waCommandConfig.js";
+import { aiConfig } from "../services/aiConfig.js";
 const router = express.Router();
 function matchesSecret(actual, expected) {
   if (!expected || typeof actual !== "string") return false;
@@ -148,6 +149,21 @@ router.post("/gateway", async (req, res) => {
     return res
       .status(503)
       .json({ ok: false, error: "Unable to persist incoming message" });
+  }
+});
+router.post('/gateway/ai', async (req, res) => {
+  try {
+    const c = aiConfig();
+    if (!matchesSecret(req.headers['x-command-secret'], c.secret)) return res.status(401).json({ ok: false });
+    const { session_id, tenant, webhook: body } = req.body || {};
+    if (!c.sessionId || session_id !== c.sessionId || tenant !== c.tenant) return res.status(403).json({ ok: false });
+    if (!body?.idMessage) return res.status(400).json({ ok: false });
+    if (body.typeWebhook !== 'incomingMessageReceived') return res.json({ ok: true, ignored: 'status' });
+    if (!body.senderData?.chatId || !body.senderData?.sender) return res.status(400).json({ ok: false });
+    return res.json(await saveIncoming('ai', session_id, body));
+  } catch (error) {
+    console.error('[AI webhook]', error.message);
+    return res.status(503).json({ ok: false });
   }
 });
 export default router;

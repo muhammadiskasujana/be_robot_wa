@@ -2166,6 +2166,14 @@ export async function handleIncoming({ instance, webhook }) {
         return;
     }
 
+    if (key === "ai_on" || key === "ai_off") {
+        if (!(await requireMasterOrReply({ master, ctx, sendText }))) return;
+        group.is_ai_enabled = key === "ai_on";
+        await group.save();
+        await sendText({ ...ctx, message: group.is_ai_enabled ? "✅ AI diaktifkan untuk grup ini." : "⛔ AI dimatikan untuk grup ini." });
+        return;
+    }
+
     // kalau bot mati, stop selain command master yang menghidupkan / help
     if (!group.is_bot_enabled) return;
 

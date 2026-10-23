@@ -19,6 +19,7 @@ export default (sequelize, DataTypes) =>
                         allowNull: false,
                         defaultValue: true,
                 },
+                is_ai_enabled: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
                 notif_data_access_enabled: {
                         type: DataTypes.BOOLEAN,
                         allowNull: false,

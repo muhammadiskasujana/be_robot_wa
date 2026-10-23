@@ -69,6 +69,8 @@ export function parseCommandV2(text, opts = {})  {
     // kita detect beberapa frasa:
     if (first === "aktifkan robot") return { key: "robot_on", args: [], argsLines: lines.slice(1) };
     if (first === "matikan robot") return { key: "robot_off", args: [], argsLines: lines.slice(1) };
+    if (first === "aktifkan ai") return { key: "ai_on", args: [], argsLines: [] };
+    if (first === "matikan ai") return { key: "ai_off", args: [], argsLines: [] };
 
     // set mode leasing
     if (first.startsWith("set mode ")) {

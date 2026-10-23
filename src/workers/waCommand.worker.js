@@ -19,7 +19,7 @@ async function dispatch() {
     if (dispatching) return;
     dispatching = true;
     try {
-        const interrupted = await WaCommandEvent.findAll({ attributes: dispatchAttributes, where: { status: "processing" }, order: [["id", "ASC"]], limit: 1000 });
+        const interrupted = await WaCommandEvent.findAll({ attributes: dispatchAttributes, where: { status: "processing", provider: config.provider }, order: [["id", "ASC"]], limit: 1000 });
         for (const row of interrupted) {
             const job = await commandQueue(commandQueueName(row, config)).getJob(`event-${row.id}`);
             const state = job && await job.getState();
@@ -31,14 +31,14 @@ async function dispatch() {
         await sequelize.transaction(async transaction => {
             const [locks] = await sequelize.query("SELECT pg_try_advisory_xact_lock(7105112026) AS locked", { transaction });
             if (!locks[0].locked) return;
-            const pending = await WaCommandEvent.findAll({ attributes: dispatchAttributes, where: { status: "pending" }, order: [["id", "ASC"]], limit: 100, transaction });
+            const pending = await WaCommandEvent.findAll({ attributes: dispatchAttributes, where: { status: "pending", provider: config.provider }, order: [["id", "ASC"]], limit: 100, transaction });
             for (const row of pending) await row.update({ status: "queued" }, { transaction });
         });
         // Commit queued state before publishing. Recover interrupted publish on the next poll.
         await sequelize.transaction(async transaction => {
             const [locks] = await sequelize.query("SELECT pg_try_advisory_xact_lock(7105112026) AS locked", { transaction });
             if (!locks[0].locked) return;
-            const rows = await WaCommandEvent.findAll({ attributes: dispatchAttributes, where: { status: "queued" }, order: [["id", "ASC"]], transaction });
+            const rows = await WaCommandEvent.findAll({ attributes: dispatchAttributes, where: { status: "queued", provider: config.provider }, order: [["id", "ASC"]], transaction });
             for (const row of rows) {
                 const queue = commandQueue(commandQueueName(row, config));
                 const existing = await queue.getJob(`event-${row.id}`);

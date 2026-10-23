@@ -7,6 +7,7 @@
     "test": "node --test",
     "dev": "node src/server.js",
     "worker:command": "node src/workers/waCommand.worker.js",
+    "worker:ai": "node src/workers/waAi.worker.js",
     "migrate:command": "node scripts/migrateWaCommand.js"
   },
   "keywords": [],
