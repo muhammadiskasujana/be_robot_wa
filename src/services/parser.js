@@ -64,6 +64,7 @@ export function parseCommandV2(text, opts = {})  {
 
     const lines = cleaned.split("\n").map(l => l.trim()).filter(Boolean);
     const first = (lines[0] || "").toLowerCase();
+    if (first === "follup") return { key: "internal_report", args: [], argsLines: [] };
 
     // key = frasa utama
     // kita detect beberapa frasa:

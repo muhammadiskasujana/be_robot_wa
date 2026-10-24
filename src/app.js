@@ -10,6 +10,7 @@ import adminRoutes from "./routes/admin.js";
 import notifyRoutes from "./routes/notifyRoutes.js";
 import tempReportsRoutes from "./routes/tempReports.js";
 import tempLinksRoutes from "./routes/templinkRoutes.js";
+import internalReportsRoutes from "./routes/internalReports.js";
 
 const app = express();
 app.set("trust proxy", 1);
@@ -48,6 +49,7 @@ app.use("/admin", adminRoutes);
 app.use("/api/notify", notifyRoutes);
 app.use("/api/temp-files", tempReportsRoutes);
 app.use("/api/temp", tempLinksRoutes);
+app.use("/api/internal-reports", internalReportsRoutes);
 
 app.use((err, req, res, next) => {
     console.error("❌ Error:", err?.message || err);

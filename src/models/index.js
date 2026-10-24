@@ -24,6 +24,7 @@ import WaCreditTransactionDef from "./WaCreditTransaction.js";
 import PtCompanyDef from "./PtCompany.js";
 import WaGroupSubscriptionDef from "./WaGroupSubscription.js";
 import defineWaDeleteHistory from "./WaDeleteHistory.js";
+import defineWaInternalReport from "./WaInternalReport.js";
 import WaGroupMatelModel from "./WaGroupMatel.js";
 
 import WaGroupFeatureDef from "./WaGroupFeature.js";
@@ -60,6 +61,7 @@ export const WaCreditTransaction = WaCreditTransactionDef(sequelize, DataTypes);
 export const PtCompany = PtCompanyDef(sequelize, DataTypes);
 export const WaGroupSubscription = WaGroupSubscriptionDef(sequelize, DataTypes);
 export const WaDeleteHistory = defineWaDeleteHistory(sequelize, DataTypes);
+export const WaInternalReport = defineWaInternalReport(sequelize, DataTypes);
 
 export const WaGroupFeature = WaGroupFeatureDef(sequelize, DataTypes);
 export const LinkedPT = LinkedPTDef(sequelize, DataTypes);

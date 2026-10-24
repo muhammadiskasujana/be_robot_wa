@@ -10,8 +10,10 @@ import {
     WaGroupLeasingBranch,
     PtCompany,
     WaDeleteHistory,
+    WaInternalReport,
 } from "../models/index.js";
 import crypto from "crypto";
+import { INTERNAL_REPORTS, parseInternalNotification } from "./internalReport.js";
 import { sendFileByUpload, sendText } from "./waCommandTransport.js";
 import { fetchAccessReportXlsx } from "./tarikreport/reportsAccess.js";
 import { fetchRekapDataXlsx } from "./rekapJumlahData/fetchRekapDataXlsx.js";
@@ -62,6 +64,7 @@ const { Op } = Sequelize;
 
 const pendingRegStore = createPendingStore("pending_register.json", 5 * 60 * 1000);
 const pendingDelStore = createPendingStore("pending_delete.json", 5 * 60 * 1000);
+const pendingInternalStore = createPendingStore("pending_internal_report.json", 5 * 60 * 1000);
 
 // optional cleaner (1 menit sekali)
 startPendingCleaner([pendingRegStore, pendingDelStore], 60 * 1000);
@@ -347,6 +350,7 @@ const GUARDED_COMMANDS = new Set([
     "request_lokasi",
     "tarik_report",
     "delete_nopol",
+    "internal_report",
     "input_data",
     "input_data_r2",
     "input_data_r4",
@@ -1685,6 +1689,28 @@ export async function handleIncoming({ instance, webhook }) {
     const group = await getOrCreateGroup(chatId, chatName);
     const modeKey = String(await getModeKeyCached(group.mode_id) || "").toLowerCase();
 
+    const internalKey = makePendingKey({ chatId, sender: senderJid });
+    const pendingInternal = await pendingInternalStore.get(internalKey);
+    if (pendingInternal && /^[1-6]$/.test(text.trim())) {
+        const quotedText = getQuotedText(webhook);
+        const quotedId = getQuotedMessageId(webhook);
+        if (!quotedId || !quotedText.includes("PILIH REPORT INTERNAL") ||
+            !quotedText.includes(pendingInternal.nopol) ||
+            (pendingInternal.menuId && quotedId !== pendingInternal.menuId)) return;
+        if (!group.is_bot_enabled) return;
+        if (!(await guardFeature({ groupId: group.id, featureKey: "internal_report", ctx, sendText }))) return;
+        const report = INTERNAL_REPORTS[Number(text.trim()) - 1];
+        try {
+            await WaInternalReport.upsert({ ...pendingInternal.data, internal_phone: phone, group_id: chatId, report_internal: report });
+            await pendingInternalStore.del(internalKey);
+            await sendText({ ...ctx, message: `✅ Report internal *${report}* untuk *${pendingInternal.nopol}* tersimpan.` });
+        } catch (error) {
+            console.error("Gagal menyimpan report internal:", error);
+            await sendText({ ...ctx, message: "❌ Gagal menyimpan report internal. Silakan coba lagi." });
+        }
+        return;
+    }
+
 
 
     const handled = await tryConfirmQuotedDeleteReason({
@@ -2195,6 +2221,19 @@ export async function handleIncoming({ instance, webhook }) {
 
     if (key === "ping") {
         await sendText({ ...ctx, message: "pong ✅" });
+        return;
+    }
+
+    if (key === "internal_report") {
+        if (!(await guardFeature({ groupId: group.id, featureKey: "internal_report", ctx, sendText }))) return;
+        const data = parseInternalNotification(getQuotedText(webhook));
+        if (!data) {
+            await sendText({ ...ctx, message: "❌ Quote notifikasi HUNTER INFO yang memuat nopol, leasing, tanggal akses, tanggal report, dan user." });
+            return;
+        }
+        const message = `*PILIH REPORT INTERNAL* untuk *${data.nopol}*\n\n${INTERNAL_REPORTS.map((r, i) => `${i + 1}. ${r}`).join("\n")}\n\nReply pesan ini dengan angka pilihan.`;
+        const sent = await sendText({ ...ctx, message });
+        await pendingInternalStore.set(internalKey, { data, nopol: data.nopol, menuId: sent?.idMessage || sent?.messageId || sent?.id || "" });
         return;
     }
 
