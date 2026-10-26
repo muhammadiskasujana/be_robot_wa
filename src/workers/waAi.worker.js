@@ -36,33 +36,35 @@ export async function processAiEvent(row) {
   const webhook = row.payload;
   const chatId = webhook.senderData.chatId;
   const question = /^smith\s+([\s\S]+)$/i.exec(extractText(webhook))?.[1]?.trim();
-  if (!question) return;
+  if (!question) return 'missing_smith_prefix';
   const group = isGroupChat(chatId);
   let record;
   if (group) {
     record = await WaGroup.findOne({ where: { chat_id: chatId } });
-    if (!record?.is_ai_enabled) return;
-    if (!(await mayAskInGroup(record, chatId, webhook.senderData.sender))) return;
+    if (!record?.is_ai_enabled) return 'group_ai_disabled';
+    if (!(await mayAskInGroup(record, chatId, webhook.senderData.sender))) return 'group_sender_not_allowed';
   } else {
     const phone = normalizePhone(webhook.senderData.sender);
-    if (!phone) return;
+    if (!phone) return 'sender_phone_unavailable';
     const command = await WaCommand.findOne({ where: { key: 'ai_chat', is_active: true }, attributes: ['id'] });
-    if (!command) return;
+    if (!command) return 'ai_chat_command_inactive';
     const policy = await WaCommandPolicy.findOne({ where: {
       scope_type: 'PERSONAL', phone_e164: phone, command_id: command.id, is_enabled: true,
     }, attributes: ['id', 'group_id', 'leasing_id'] });
-    if (!policy) return;
+    if (!policy) return 'personal_policy_missing';
+    if (!policy.group_id && !policy.leasing_id) return 'personal_policy_scope_missing';
     if (policy.group_id) record = await WaGroup.findByPk(policy.group_id);
     else if (policy.leasing_id) record = { leasing_id: policy.leasing_id };
   }
   const aiScope = await resolveAiScope(record);
-  if (!aiScope) return;
+  if (!aiScope) return 'ai_scope_unavailable';
   const response = await axios.post(`${config.agentURL}/v1/channels/whatsapp/chat`,
     { message: question, use_memory: !group, sender_id: group ? null : normalizePhone(webhook.senderData.sender), ai_scope: aiScope },
     { headers: { 'X-Local-Api-Key': config.apiKey }, timeout: 180000 });
   const answer = response.data?.answer;
   if (typeof answer !== 'string' || !answer.trim()) throw new Error('LLM returned empty answer');
   await send(chatId, answer, row.id);
+  return null;
 }
 
 await sequelize.authenticate();
@@ -76,8 +78,10 @@ while (true) {
     const [claimed] = await WaCommandEvent.update({ status: 'processing' }, { where: { id: row.id, status: 'pending' } });
     if (!claimed) continue;
     try {
-      await processAiEvent(row);
+      console.info('[WA_AI event]', row.id, 'received');
+      const skipReason = await processAiEvent(row);
       await row.update({ status: 'done' });
+      console.info('[WA_AI event]', row.id, skipReason ? `skipped:${skipReason}` : 'replied');
     } catch (error) {
       await row.update({ status: 'unknown', error: error.message });
       console.error('[WA_AI event]', row.id, error.message);

@@ -160,7 +160,9 @@ router.post('/gateway/ai', async (req, res) => {
     if (!body?.idMessage) return res.status(400).json({ ok: false });
     if (body.typeWebhook !== 'incomingMessageReceived') return res.json({ ok: true, ignored: 'status' });
     if (!body.senderData?.chatId || !body.senderData?.sender) return res.status(400).json({ ok: false });
-    return res.json(await saveIncoming('ai', session_id, body));
+    const result = await saveIncoming('ai', session_id, body);
+    console.info('[WA_AI webhook]', result.eventId, result.duplicate ? 'duplicate' : 'accepted');
+    return res.json(result);
   } catch (error) {
     console.error('[AI webhook]', error.message);
     return res.status(503).json({ ok: false });
