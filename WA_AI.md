@@ -14,6 +14,8 @@ Nomor yang aktif di `wa_masters` mendapat cakupan management untuk pertanyaan AI
 
 `agent-backend` tetap membatasi cakupan maksimum melalui `TENANT_POLICIES_JSON` atau `TENANT_POLICIES_FILE`. Agar Master/management melihat semua tool baca yang tersedia, policy tenant harus mengandung seluruh scope: `master:vehicles:read`, `master:access:read`, `master:users:read`, `master:locations:read`, `master:master-data:read`, `master:exports:create`, `master:exports:read`, `master:capabilities:read`, dan role `master`. Array `pts` dan `leasings` harus memuat semua nama aktif yang memang boleh diakses, dengan ejaan identik dengan database agent-backend. Tidak ada wildcard. Group PT/leasing menerima irisan konfigurasi Robot Hunter dengan policy ini; PT saja tidak membuka data kendaraan karena tabel kendaraan dibatasi menurut leasing, dan leasing saja tidak membuka data user karena user dibatasi menurut PT.
 
+Untuk membuat nilai env policy dari seluruh PT/leasing aktif di database Robot Hunter, jalankan `npm run policy:ai` di container Robot Hunter utama yang memakai database produksi. Perintah ini hanya membaca tabel PT/leasing dan mencetak satu baris `TENANT_POLICIES_JSON=...`; salin nilainya ke env agent-backend lalu redeploy agent-backend. Jika `SERVICE_TENANT` berbeda, jalankan `npm run policy:ai -- <service-tenant>`. Daftar ini adalah snapshot: ulangi setelah menambah atau menonaktifkan PT/leasing. Pastikan nama PT/leasing yang dicetak identik dengan nilai di database agent-backend.
+
 ### Uji chat pribadi
 
 1. Temukan UUID command `ai_chat` melalui `GET /admin/credit/commands?q=ai_chat` dan UUID grup melalui `GET /admin/groups` (keduanya memakai token admin Robot Hunter).
