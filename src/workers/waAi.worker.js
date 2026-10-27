@@ -3,6 +3,7 @@ import axios from 'axios';
 import { sequelize, WaCommandEvent, WaGroup, WaMaster, WaCommand, WaCommandPolicy } from '../models/index.js';
 import { aiConfig } from '../services/aiConfig.js';
 import { resolveAiScope } from '../services/aiScope.js';
+import { sendAiExports } from '../services/waAiExports.js';
 import { extractText, normalizePhone, isGroupChat } from '../services/parser.js';
 
 const config = aiConfig();
@@ -65,8 +66,10 @@ export async function processAiEvent(row) {
     { message: question, use_memory: !group, sender_id: group ? null : senderPhone, ai_scope: aiScope },
     { headers: { 'X-Local-Api-Key': config.apiKey }, timeout: 180000 });
   const answer = response.data?.answer;
-  if (typeof answer !== 'string' || !answer.trim()) throw new Error('LLM returned empty answer');
-  await send(chatId, answer, row.id);
+  const exportCount = await sendAiExports({ exports: response.data?.exports, aiScope, chatId, eventId: row.id, config });
+  if (exportCount) console.info('[WA_AI export]', row.id, exportCount, 'sent');
+  if (typeof answer === 'string' && answer.trim()) await send(chatId, answer, row.id);
+  else if (!exportCount) throw new Error('LLM returned empty answer');
   return null;
 }
 
