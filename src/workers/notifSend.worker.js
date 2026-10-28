@@ -93,7 +93,7 @@
             )
         );
 
-        return pt === "PT KHUSUS";
+        return pt === "PT KHUSUS" || pt === "" || pt === "-";
     }
 
     function shouldHidePtIdentity(data = {}) {
