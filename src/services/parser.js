@@ -258,9 +258,9 @@ export function parseCommandV2(text, opts = {})  {
         };
     }
 
-    // cetak [penugasan|kuasa|bastk|paket [tugas|kuasa]] [R2|R4] [tenant] [nomor HP matel] [nopol]
-    if (first === "cetak" || first.startsWith("cetak ")) {
-        const raw = first.replace(/^cetak\s*/i, "").trim();
+    // cetak/request [jenis dokumen] [R2|R4] [tenant] [nomor HP matel] [nopol]
+    if (first === "cetak" || first.startsWith("cetak ") || first === "request" || first.startsWith("request ")) {
+        const raw = first.replace(/^(?:cetak|request)\s*/i, "").trim();
         return {
             key: "cetak_surat",
             args: raw.split(/\s+/).filter(Boolean),

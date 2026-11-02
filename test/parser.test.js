@@ -46,6 +46,19 @@ test("recognizes incomplete cetak command so the handler can return format help"
     });
 });
 
+test("parses receipt and complete document commands", () => {
+    const examples = [
+        ["Cetak tanda_terima R2 LBS 081351275916 DN3946OH", ["tanda_terima", "r2", "lbs", "081351275916", "dn3946oh"]],
+        ["Cetak bastk_tanda_terima R2 LBS 081351275916 DN3946OH", ["bastk_tanda_terima", "r2", "lbs", "081351275916", "dn3946oh"]],
+        ["Cetak lengkap kuasa R2 LBS 081351275916 DN3946OH", ["lengkap", "kuasa", "r2", "lbs", "081351275916", "dn3946oh"]],
+        ["request lengkap r4 hsn 085212345678 DA4321BB", ["lengkap", "r4", "hsn", "085212345678", "da4321bb"]],
+    ];
+    for (const [input, args] of examples) {
+        assert.deepEqual(parseCommandV2(input), { key: "cetak_surat", args, argsLines: [] });
+    }
+    assert.equal(parseCommandV2("request lokasi 08123456789").key, "request_lokasi");
+});
+
 test("parses input tarikan management configuration commands", () => {
     assert.equal(parseCommandV2("set input tarikan all").key, "set_input_tarikan");
     assert.deepEqual(parseCommandV2("set input tarikan leasing FIF, BFI").args, ["leasing fif, bfi"]);

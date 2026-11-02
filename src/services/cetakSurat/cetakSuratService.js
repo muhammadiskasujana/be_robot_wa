@@ -4,7 +4,7 @@ import { WaCommand, WaCommandPolicy } from "../../models/index.js";
 
 const { Op } = Sequelize;
 const COMMAND_KEY = "cetak_surat";
-const DOCUMENT_TYPES = new Set(["bastk", "penugasan", "kuasa", "paket"]);
+const DOCUMENT_TYPES = new Set(["bastk", "penugasan", "kuasa", "tanda_terima", "paket", "lengkap", "bastk_tanda_terima"]);
 const BUNDLE_LETTER_TYPES = new Set(["penugasan", "kuasa"]);
 const VEHICLE_TYPES = new Set(["R2", "R4"]);
 
@@ -98,8 +98,8 @@ export async function generateWhatsAppDocument({
     const matel_phone = normalizePhone(matelPhone);
     const plate = normalizePlate(nopol);
 
-    if (!DOCUMENT_TYPES.has(document_type)) throw new Error("Jenis dokumen harus bastk, penugasan, kuasa, atau paket.");
-    if (document_type === "paket" && !BUNDLE_LETTER_TYPES.has(bundle_letter_type)) {
+    if (!DOCUMENT_TYPES.has(document_type)) throw new Error("Jenis dokumen tidak valid.");
+    if (["paket", "lengkap"].includes(document_type) && !BUNDLE_LETTER_TYPES.has(bundle_letter_type)) {
         throw new Error("Jenis surat paket harus tugas/penugasan atau kuasa.");
     }
     if (!VEHICLE_TYPES.has(vehicle_type)) throw new Error("Jenis kendaraan harus R2 atau R4.");
@@ -123,7 +123,7 @@ export async function generateWhatsAppDocument({
         `${baseUrl}/api/tarikan-documents-external/whatsapp/generate`,
         {
             document_type,
-            ...(document_type === "paket" ? { bundle_letter_type } : {}),
+            ...(["paket", "lengkap"].includes(document_type) ? { bundle_letter_type } : {}),
             vehicle_type,
             tenant: tenantCode,
             matel_phone,
@@ -163,7 +163,7 @@ export async function generateWhatsAppDocument({
         documentCount: clean(response.headers?.["x-document-count"]),
         assignmentBasis: clean(response.headers?.["x-assignment-basis"]),
         financeIdentitySource: clean(response.headers?.["x-finance-identity-source"]),
-        bundleLetterType: document_type === "paket" ? bundle_letter_type : "",
+        bundleLetterType: ["paket", "lengkap"].includes(document_type) ? bundle_letter_type : "",
         requestMetadata,
     };
 }

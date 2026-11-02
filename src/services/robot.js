@@ -4392,7 +4392,7 @@ export async function handleIncoming({ instance, webhook }) {
         const documentTypeRaw = commandArgs.shift();
         const documentType = String(documentTypeRaw || "").toLowerCase();
         let bundleLetterType = "";
-        if (documentType === "paket" && ["tugas", "penugasan", "kuasa"].includes(String(commandArgs[0] || "").toLowerCase())) {
+        if (["paket", "lengkap"].includes(documentType) && ["tugas", "penugasan", "kuasa"].includes(String(commandArgs[0] || "").toLowerCase())) {
             const bundleRaw = String(commandArgs.shift() || "").toLowerCase();
             bundleLetterType = bundleRaw === "tugas" ? "penugasan" : bundleRaw;
         }
@@ -4403,7 +4403,7 @@ export async function handleIncoming({ instance, webhook }) {
         const nopol = normPlate(nopolRaw);
 
         if (!isHispay && (
-            !["penugasan", "kuasa", "bastk", "paket"].includes(documentType) ||
+            !["penugasan", "kuasa", "bastk", "tanda_terima", "paket", "lengkap", "bastk_tanda_terima"].includes(documentType) ||
             !["R2", "R4"].includes(vehicleType) ||
             !/^[a-z0-9][a-z0-9_-]*$/.test(tenant) ||
             !matelPhone ||
@@ -4415,9 +4415,9 @@ export async function handleIncoming({ instance, webhook }) {
                 message:
                     "❌ Format command tidak valid.\n" +
                     "Gunakan:\n" +
-                    "cetak [penugasan|kuasa|bastk] [R2|R4] [slug tenant] [nomor HP matel] [nopol]\n" +
-                    "cetak paket [tugas|kuasa] [R2|R4] [slug tenant] [nomor HP matel] [nopol]\n\n" +
-                    "Contoh: cetak paket kuasa R4 hsn 085212345678 DA4321BB",
+                    "cetak [penugasan|kuasa|bastk|tanda_terima|bastk_tanda_terima] [R2|R4] [slug tenant] [nomor HP matel] [nopol]\n" +
+                    "cetak [paket|lengkap] [tugas|kuasa] [R2|R4] [slug tenant] [nomor HP matel] [nopol]\n\n" +
+                    "Contoh: cetak lengkap kuasa R4 hsn 085212345678 DA4321BB",
             });
             return;
         }
@@ -4473,9 +4473,9 @@ export async function handleIncoming({ instance, webhook }) {
             });
             const branchLabel = branch.name || branch.code || "TIDAK DISET";
             const documentNumber = result.documentNumber ? `\nNomor dokumen: ${result.documentNumber}` : "";
-            const documentLabel = documentType === "paket"
-                ? `PAKET ${(result.bundleLetterType || bundleLetterType || "penugasan").toUpperCase()}`
-                : documentType.toUpperCase();
+            const documentLabel = ["paket", "lengkap"].includes(documentType)
+                ? `${documentType.toUpperCase()} ${(result.bundleLetterType || bundleLetterType || "penugasan").toUpperCase()}`
+                : documentType.replaceAll("_", " ").toUpperCase();
 
             await sendFileByUpload({
                 idInstance: ctx.idInstance,

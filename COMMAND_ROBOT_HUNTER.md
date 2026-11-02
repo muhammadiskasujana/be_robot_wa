@@ -124,15 +124,22 @@ Nilai target management yang valid mengikuti konfigurasi aplikasi/server. Jika t
 | `cetak penugasan <R2/R4> <tenant> <HP matel> <nopol>` | Leasing grup aktif | Membuat PDF surat penugasan. | PDF dan metadata dokumen dikirim ke chat pribadi. |
 | `cetak kuasa <R2/R4> <tenant> <HP matel> <nopol>` | Leasing grup aktif | Membuat PDF surat kuasa. | PDF dikirim ke chat pribadi. |
 | `cetak bastk <R2/R4> <tenant> <HP matel> <nopol>` | Leasing grup aktif | Membuat PDF BASTK. | PDF dikirim ke chat pribadi. |
+| `cetak tanda_terima <R2/R4> <tenant> <HP matel> <nopol>` | Leasing grup aktif | Membuat Nota Tanda Terima. | PDF nota dikirim ke chat pribadi. |
+| `cetak bastk_tanda_terima <R2/R4> <tenant> <HP matel> <nopol>` | Leasing grup aktif | Membuat BASTK dan Nota Tanda Terima. | PDF gabungan dua dokumen dikirim ke chat pribadi. |
 | `cetak paket <R2/R4> <tenant> <HP matel> <nopol>` | Leasing grup aktif | Membuat paket dokumen dengan tipe surat default. | Paket PDF dikirim ke chat pribadi. |
 | `cetak paket tugas ...`, `cetak paket penugasan ...`, atau `cetak paket kuasa ...` | Leasing grup aktif | Membuat paket dengan tipe surat yang dipilih. | Paket PDF dan nomor dokumen (jika ada) dikirim ke chat pribadi. |
+| `cetak lengkap [tugas|kuasa] <R2/R4> <tenant> <HP matel> <nopol>` | Leasing grup aktif | Membuat Surat Penugasan/Kuasa, BASTK, dan Nota Tanda Terima. Tanpa pilihan surat, default Penugasan. | PDF gabungan tiga dokumen dikirim ke chat pribadi. |
 
 Contoh:
 
 ```text
 cetak paket kuasa R4 hsn 085212345678 DA4321BB
+cetak lengkap kuasa R2 lbs 081351275916 DN3946OH
+cetak tanda_terima R2 lbs 081351275916 DN3946OH
 hispay 740010058091
 ```
+
+Semua variasi `cetak` di atas juga menerima awalan `request`. Nomor HP pada command adalah HP matel; nomor WhatsApp pengirim dikirim terpisah ke API untuk audit dan identitas pemberi kuasa Finance.
 
 ## 8. File SFTP dan VPN
 
