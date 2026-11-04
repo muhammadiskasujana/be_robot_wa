@@ -24,7 +24,7 @@ function extractApiMessage(data) {
  * - ok true, found true, data:{...}
  * - ok true, found false, message:"Data tidak ditemukan"
  */
-export async function cekNopolFromApi(q) {
+export async function cekNopolFromApi(q, { timeoutMs = 60000 } = {}) {
     const query = normQ(q);
     if (!query) throw new Error("param kosong");
 
@@ -38,7 +38,7 @@ export async function cekNopolFromApi(q) {
 
             const res = await axios.get(url, {
                 params: { input: query },
-                timeout: 60000,
+                timeout: timeoutMs,
                 validateStatus: () => true,
             });
 

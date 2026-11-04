@@ -11,6 +11,7 @@
     import { WaCommandPolicy, sequelize } from "../models/index.js";
     
     import { buildManagementMessage } from "./managementMessage.js";
+    import { lookupNotifContractNumber } from "../services/cekNopol/notifContractNumber.js";
     
     const { Op } = Sequelize;
     
@@ -255,6 +256,7 @@
         lines.push(`🚨 *HUNTER INFO* 🚨`);
         lines.push(`📌 🚗 *Data Kendaraan*`);
         lines.push(`  • Nopol: ${bold(data.nopol)}`);
+        if (opt?.contractNumber) lines.push(`  • No. Kontrak: ${bold(opt.contractNumber)}`);
         if (data.nosin) lines.push(`  • Nosin: ${bold(data.nosin)}`);
         if (data.noka) lines.push(`  • Noka: ${bold(data.noka)}`);
         if (data.tipe) lines.push(`  • Tipe: ${bold(data.tipe)}`);
@@ -686,6 +688,8 @@
                 };
             }
     
+            const contractNumber = await lookupNotifContractNumber(payload);
+
             // 3) Debit beneran (kalau CREDIT)
             const bill = await checkAndDebit({
                 commandKey: COMMAND_KEY_NOTIF,
@@ -717,7 +721,7 @@
     
             const mentionJid = isIndividu && billPhone ? toMentionJid(billPhone) : null;
     
-            const msg = buildMessage(payload, bill, { mentionPhone: billPhone }); // opsional
+            const msg = buildMessage(payload, bill, { mentionPhone: billPhone, contractNumber }); // opsional
             const sent = await sendWithFallback({
                 to: group.chat_id,
                 message: msg,
