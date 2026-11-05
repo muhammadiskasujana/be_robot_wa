@@ -52,6 +52,7 @@ import {createTempLink} from "./tempLink/tempLinkService.js";
 import {deleteLeasingUser} from "./registerWebLeasing/deleteLeasingUser.js";
 import {formatRequestLokasiMessage, parseRequestLokasiInput, requestLokasiTerbaru} from "./lokasi/requestLokasi.js";
 import {fetchUsersReportXlsx} from "./tarikreport/fetchUsersReportXlsx.js";
+import { fetchAccessReportByPhoneXlsx } from "./tarikreport/reportsAccessByPhone.js";
 import {guardFeature} from "./middleware/cekFitur.js";
 import { fetchKartuPiutangDocument, normalizePiutangIdentifier } from "./kartuPiutang/kartuPiutangService.js";
 import {
@@ -3944,6 +3945,50 @@ export async function handleIncoming({ instance, webhook }) {
         }
         // master-only atau boleh semua? aku bikin master-only biar aman
         // if (!master) return;
+
+        // ===== tarik report nomor_hp_user {waktu} (khusus master) =====
+        const phoneArg = String(args[1] || "").trim();
+        if (phoneArg) {
+            if (!master) {
+                await sendText({ ...ctx, message: "❌ Tarik report per nomor HP khusus master." });
+                return;
+            }
+
+            const parsedPhone = parseReportDate((args[0] || "").trim());
+            if (!parsedPhone.ok) {
+                await sendText({ ...ctx, message: `❌ ${parsedPhone.error}` });
+                return;
+            }
+
+            await sendText({ ...ctx, message: "⏳ Sedang tarik report excel..." });
+
+            try {
+                const buf = await fetchAccessReportByPhoneXlsx({
+                    baseUrl: "https://api.digitalmanager.id",
+                    phone: phoneArg,
+                    tahun: parsedPhone.tahun,
+                    bulan: parsedPhone.bulan,
+                    tanggal: parsedPhone.tanggal,
+                });
+
+                const tglLabel = parsedPhone.tanggal ? `-${String(parsedPhone.tanggal).padStart(2, "0")}` : "";
+                const filename = `report-access-hp-${phoneArg}-${parsedPhone.tahun}-${String(parsedPhone.bulan).padStart(2, "0")}${tglLabel}.xlsx`;
+                const meta = await saveTempFile(buf, filename);
+                const link = `${process.env.PUBLIC_BASE_URL}/api/temp-files/dl/${meta.token}`;
+
+                await sendText({
+                    ...ctx,
+                    message:
+                        `✅ Report siap.\n` +
+                        `Nomor HP: ${phoneArg}\n` +
+                        `Periode: ${parsedPhone.tanggal ? `${parsedPhone.tanggal} ` : ""}${parsedPhone.bulan}/${parsedPhone.tahun}\n\n` +
+                        `⬇️ Download (berlaku 5 menit):\n${link}`,
+                });
+            } catch (e) {
+                await sendText({ ...ctx, message: `❌ Gagal tarik report.\n${e?.message || "Unknown error"}` });
+            }
+            return;
+        }
 
         // leasing wajib dari group
         if (!group.leasing_id) {

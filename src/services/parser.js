@@ -278,7 +278,14 @@ export function parseCommandV2(text, opts = {})  {
 // tarik report 11 juli 2025
 // tarik report hari ini
     if (first.startsWith("tarik report")) {
-        const after = first.replace("tarik report", "").trim();
+        let after = first.replace("tarik report", "").trim();
+        // tarik report 081234567890 juli 2025 -> args: [waktu, nomor_hp]
+        const phoneMatch = after.match(/^(\+?\d[\d\s-]{6,}\d)(?:\s+(.*))?$/);
+        if (phoneMatch && phoneMatch[1].replace(/\D/g, "").length >= 8) {
+            const phone = phoneMatch[1].replace(/\D/g, "");
+            after = (phoneMatch[2] || "").trim();
+            return { key: "tarik_report", args: [after, phone], argsLines: lines.slice(1) };
+        }
         return { key: "tarik_report", args: after ? [after] : [], argsLines: lines.slice(1) };
     }
 
