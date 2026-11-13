@@ -77,12 +77,12 @@ export async function greenapiGetGroupData({ idInstance, apiToken, groupId }) {
  */
 export async function getGroupAdminsCached({ ctx, groupChatId }) {
     const config = commandConfig();
-    const key = `${CacheKeys.groupAdmins(groupChatId)}:${config.provider}:${config.provider === "baileys" ? config.sessionId : ctx.idInstance}`;
+    const key = `${CacheKeys.groupAdmins(groupChatId)}:${config.provider}:${["baileys", "bawa"].includes(config.provider) ? config.sessionId : ctx.idInstance}`;
 
     return fetchJson(
         key,
         async () => {
-            const data = config.provider === "baileys" ? await gatewayRequest("group", { group_id: groupChatId }) : await greenapiGetGroupData({
+            const data = ["baileys", "bawa"].includes(config.provider) ? await gatewayRequest("group", { group_id: groupChatId }) : await greenapiGetGroupData({
                 idInstance: ctx.idInstance,
                 apiToken: ctx.apiToken,
                 groupId: groupChatId,

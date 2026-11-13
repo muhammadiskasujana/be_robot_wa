@@ -12,7 +12,7 @@ export function normalizeBawaIncoming(event) {
         typeWebhook: "incomingMessageReceived",
         idMessage: data.id,
         timestamp: data.timestamp || event.timestamp,
-        senderData: { chatId: data.chat, sender: data.sender, chatName: data.push_name || "" },
+        senderData: { chatId: data.chat, sender: data.sender, senderPhone: data.sender_phone || "", chatName: data.push_name || "" },
         messageData: {
             typeMessage: data.type,
             textMessageData: { textMessage: data.text || "" },

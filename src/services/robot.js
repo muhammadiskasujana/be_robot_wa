@@ -1656,9 +1656,14 @@ export async function handleIncoming({ instance, webhook }) {
     const senderJid = webhook?.senderData?.sender;
     const chatName = webhook?.senderData?.chatName;
 
-    const phone = normalizePhone(senderJid);
+    const phone = normalizePhone(senderJid) || normalizePhone(webhook?.senderData?.senderPhone);
     const text = extractText(webhook);
-    if (!chatId || !phone) return;
+    if (!chatId || !phone) {
+        if (chatId && String(senderJid || "").endsWith("@lid")) {
+            console.warn("[WA_COMMAND] sender LID has no phone mapping", { chatId, senderJid });
+        }
+        return;
+    }
 
     const ctx = {
         idInstance: instance.id_instance,

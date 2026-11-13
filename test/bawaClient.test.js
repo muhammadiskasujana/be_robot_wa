@@ -30,4 +30,8 @@ test('Bawa webhook verifies raw body and retains quoted text for command parsing
     type: 'text', text: 'hapus nopol', quoted: { id: 'wamid.quoted', text: 'DA1234AA' } } });
   assert.equal(normalized.messageData.quotedMessage.textMessage, 'DA1234AA');
   assert.equal(normalized.senderData.chatId, '123@g.us');
+  const lidIncoming = normalizeBawaIncoming({ data: { id: 'wamid.lid', chat: '123@g.us', sender: '12345:44@lid',
+    sender_phone: '628123456789', type: 'text', text: 'list cabang' } });
+  assert.equal(lidIncoming.senderData.sender, '12345:44@lid');
+  assert.equal(lidIncoming.senderData.senderPhone, '628123456789');
 });
