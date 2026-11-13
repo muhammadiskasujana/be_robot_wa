@@ -5,12 +5,21 @@ import { WaCommandEvent } from "../models/index.js";
 import { redis } from "../queues/redis.js";
 import { commandConfig } from "./waCommandConfig.js";
 import { sendText as greenText, sendFileByUpload as greenFile } from "./greenapi.js";
+import { bawaSend, bawaGroup } from "./bawaClient.js";
 
 export { commandExecution };
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 export async function gatewayRequest(path, body) {
     const c = commandConfig();
+    if (c.provider === "bawa") {
+        if (path === "group") return bawaGroup({ baseURL: c.baseURL, instanceId: c.sessionId, token: c.token, groupId: body.group_id });
+        if (path !== "send") throw new Error(`Unsupported Bawa request: ${path}`);
+        return bawaSend({ baseURL: c.baseURL, instanceId: c.sessionId, token: c.token,
+            kind: body.kind, to: body.to, message: body.message, base64: body.base64,
+            filename: body.filename, mimetype: body.mimetype, caption: body.caption,
+            quotedId: body.quoted_message_id, mentions: body.mentions || [], requestId: body.request_id });
+    }
     const response = await axios.post(`${c.baseURL}/api/external/whatsapp/command/${path}`, {
         ...body, session_id: c.sessionId,
     }, { headers: { Authorization: `Bearer ${c.token}`, "X-Tenant": c.tenant }, timeout: 120000 });
@@ -52,7 +61,7 @@ async function sendGateway(kind, ctx) {
         filename: ctx.filename, mimetype: ctx.contentType || "application/pdf", caption: ctx.caption || "",
     };
     const [event] = await WaCommandEvent.findOrCreate({ where: { event_key: eventKey }, defaults: {
-        direction: "out", provider: "baileys", instance_key: c.sessionId,
+        direction: "out", provider: c.provider, instance_key: c.sessionId,
         chat_id: ctx.chatId, payload,
     } });
     const deadline = Date.now() + Number(process.env.WA_COMMAND_SEND_WAIT_MS || 300000);
@@ -66,11 +75,11 @@ async function sendGateway(kind, ctx) {
 }
 
 export async function sendText(ctx) {
-    return commandConfig().provider === "baileys" ? sendGateway("text", ctx)
+    return ["baileys", "bawa"].includes(commandConfig().provider) ? sendGateway("text", ctx)
         : greenSerial(ctx.idInstance, () => greenText(ctx));
 }
 export async function sendFileByUpload(ctx) {
     if (!ctx.buffer?.length) throw new Error("File WhatsApp kosong");
-    return commandConfig().provider === "baileys" ? sendGateway("document", ctx)
+    return ["baileys", "bawa"].includes(commandConfig().provider) ? sendGateway("document", ctx)
         : greenSerial(ctx.idInstance, () => greenFile(ctx));
 }

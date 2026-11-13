@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { bawaSend } from './bawaClient.js';
 
 const exportPath = /^\/v1\/exports\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
 const maxDocumentBytes = 16 * 1024 * 1024;
@@ -25,16 +26,24 @@ export async function sendAiExports({ exports, aiScope, chatId, eventId, config,
     if (!file.length || file.length > maxDocumentBytes || file.subarray(0, 4).toString('hex') !== '504b0304') {
       throw new Error('Invalid AI Excel export');
     }
-    await http.post(`${config.baseURL}/api/external/whatsapp/command/send`, {
-      session_id: config.sessionId, kind: 'document', to: chatId,
-      filename: `robot-hunter-${exportId}.xlsx`,
-      mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      caption: 'File Excel Robot Hunter', base64: file.toString('base64'),
-      request_id: `ai-${eventId}-export-${exportId}`,
-    }, {
-      headers: { Authorization: `Bearer ${config.token}`, 'X-Tenant': config.tenant },
-      timeout: 120000, maxBodyLength: 24 * 1024 * 1024,
-    });
+    if (config.provider === 'bawa') {
+      await bawaSend({ baseURL: config.baseURL, instanceId: config.sessionId, token: config.token,
+        kind: 'document', to: chatId, filename: `robot-hunter-${exportId}.xlsx`,
+        mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        caption: 'File Excel Robot Hunter', base64: file.toString('base64'),
+        requestId: `ai-${eventId}-export-${exportId}` }, http);
+    } else {
+      await http.post(`${config.baseURL}/api/external/whatsapp/command/send`, {
+        session_id: config.sessionId, kind: 'document', to: chatId,
+        filename: `robot-hunter-${exportId}.xlsx`,
+        mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        caption: 'File Excel Robot Hunter', base64: file.toString('base64'),
+        request_id: `ai-${eventId}-export-${exportId}`,
+      }, {
+        headers: { Authorization: `Bearer ${config.token}`, 'X-Tenant': config.tenant },
+        timeout: 120000, maxBodyLength: 24 * 1024 * 1024,
+      });
+    }
     sent++;
   }
   return sent;

@@ -58,6 +58,7 @@ async function dispatch() {
 await sequelize.authenticate();
 const names = Array.from({ length: config.shards }, (_, index) => `wa_command_in_${index}`);
 if (config.provider === "baileys") names.push("wa_command_baileys_out");
+if (config.provider === "bawa") names.push("wa_command_bawa_out");
 const workers = [];
 for (const name of names) {
     await commandQueue(name).setGlobalConcurrency(1);

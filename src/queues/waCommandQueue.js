@@ -8,7 +8,7 @@ export const commandConnection = {
 const queues = new Map();
 export function commandQueueName(row, config = commandConfig()) {
     return row.direction === "out"
-        ? "wa_command_baileys_out"
+        ? (config.provider === "bawa" ? "wa_command_bawa_out" : "wa_command_baileys_out")
         : `wa_command_in_${commandShard(row.chat_id, config.shards)}`;
 }
 export function commandQueue(name) {

@@ -5,6 +5,7 @@ import cors from "cors";
 import cookieParser from "cookie-parser";
 
 import webhookRoutes from "./routes/webhook.js";
+import bawaWebhookRoutes from "./routes/bawaWebhook.js";
 import authRoutes from "./routes/auth.js";
 import adminRoutes from "./routes/admin.js";
 import notifyRoutes from "./routes/notifyRoutes.js";
@@ -35,6 +36,8 @@ app.use(cors(corsOptions));
 // ✅ preflight for all paths (bukan domain)
 app.options(/.*/, cors(corsOptions));
 
+// Bawa HMAC must be checked against the original bytes before JSON parsing.
+app.use("/webhook/bawa", bawaWebhookRoutes);
 app.use(express.json({ limit: "2mb" }));
 app.use(cookieParser());
 

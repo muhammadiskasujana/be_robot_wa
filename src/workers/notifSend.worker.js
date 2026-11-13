@@ -3,8 +3,7 @@
     import IORedis from "ioredis";
     import Sequelize from "sequelize";
     import { QueryTypes } from "sequelize";
-    import axios from "axios";
-    import https from "https";
+    import { bawaSend } from "../services/bawaClient.js";
 
 
     import { checkAndDebit, resolvePolicyCached } from "../services/billingService.js";
@@ -15,16 +14,10 @@
     
     const { Op } = Sequelize;
     
-    // ====== HTTP client (native fetch Node 18+) ======
-    const WA_SEND_URL = "https://wa-gateway.ridjstudio.cloud/api/external/whatsapp/send/text";
-    const WA_BEARER = process.env.WA_EXT_BEARER || "whatsapp_ext_9f8a2b7c6d5e4a3b";
-    const WA_TENANT = process.env.WA_EXT_TENANT || "gateway";
-    
-    // ====== hardcode session list (mulai 2 dulu) ======
-    const NOTIF_SESSIONS = [
-        "b319ed90-2504-4589-abc7-162d8a449405",
-        // "57ce8603-4114-4389-a886-dfade882bf63",
-    ];
+    const BAWA_BASE_URL = (process.env.NOTIF_BAWA_BASE_URL || "https://api-gateway.intelixstudio.tech").replace(/\/$/, "");
+    const BAWA_INSTANCE_ID = process.env.NOTIF_BAWA_INSTANCE_ID;
+    const BAWA_TOKEN = process.env.NOTIF_BAWA_TOKEN;
+    if (!BAWA_INSTANCE_ID || !BAWA_TOKEN) throw new Error("NOTIF_BAWA_INSTANCE_ID dan NOTIF_BAWA_TOKEN wajib diisi");
     
     global.__notifRedis =
         global.__notifRedis ||
@@ -203,25 +196,11 @@
         return `https://www.google.com/maps?q=${lat},${lng}`;
     }
     
-    async function sendWithFallback({ to, message, mentions = [] }) {
-        const sessions = NOTIF_SESSIONS.filter(Boolean);
-        const start = hashToIndex(to, sessions.length);
-    
-        let lastErr = null;
-        for (let i = 0; i < sessions.length; i++) {
-            const session_id = sessions[(start + i) % sessions.length];
-            try {
-                await takeRateToken(global.__notifRedis, session_id);
-                await sendTextViaGateway({ session_id, to, message, mentions });
-                return { ok: true, session_id };
-            } catch (e) {
-                lastErr = e;
-                const msg = String(e?.message || "");
-                if (msg.includes("forbidden")) continue;
-                continue;
-            }
-        }
-        throw lastErr || new Error("all sessions failed");
+    async function sendNotification({ to, message, mentions = [], requestId }) {
+        await takeRateToken(global.__notifRedis, BAWA_INSTANCE_ID);
+        const result = await bawaSend({ baseURL: BAWA_BASE_URL, instanceId: BAWA_INSTANCE_ID,
+            token: BAWA_TOKEN, to, message, mentions, requestId });
+        return { ok: true, session_id: BAWA_INSTANCE_ID, result };
     }
 
     function buildMessage(data, bill = null, opt = {}) {
@@ -401,21 +380,6 @@
     }
     
     // =====================
-    // sharding session
-    // =====================
-    function hashToIndex(str, mod) {
-        let h = 0;
-        const s = String(str);
-        for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
-        return mod ? h % mod : 0;
-    }
-    function pickSessionForGroup() {
-        const session_id = NOTIF_SESSIONS[0];
-        if (!session_id) throw new Error("NOTIF_SESSIONS kosong");
-        return session_id;
-    }
-    
-    // =====================
     // rate limit per session
     // =====================
     async function takeRateToken(client, sessionId) {
@@ -443,40 +407,6 @@
             const ok = await client.eval(lua, 1, key, String(max), String(ttlSec));
             if (ok === 1) return true;
             await new Promise((r) => setTimeout(r, 50));
-        }
-    }
-    
-    // =====================
-    // send via gateway endpoint
-    // =====================
-    const httpsAgent = new https.Agent({
-        rejectUnauthorized: false, // ⛔ bypass SSL (sementara)
-    });
-
-    async function sendTextViaGateway({ session_id, to, message, mentions = [] }) {
-        try {
-            const res = await axios.post(
-                WA_SEND_URL,
-                { session_id, to, message, mentions },
-                {
-                    httpsAgent,
-                    headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${WA_BEARER}`,
-                        "X-Tenant": WA_TENANT,
-                    },
-                    timeout: 15000,
-                }
-            );
-
-            return res.data;
-        } catch (err) {
-            console.error("[sendTextViaGateway axios error]", {
-                message: err.message,
-                status: err.response?.status,
-                data: err.response?.data,
-            });
-            throw err;
         }
     }
     
@@ -579,10 +509,11 @@
     
                 // 4) send
                 const msg = buildManagementMessage({ ...payload, event_key: eventKey });
-                const sent = await sendWithFallback({
+                const sent = await sendNotification({
                     to: group.chat_id,
                     message: msg,
                     mentions: [],
+                    requestId: `notif-${job.id}`,
                 });
     
                 return {
@@ -716,16 +647,14 @@
             }
     
             // 4) send
-            const session_id = pickSessionForGroup();
-            await takeRateToken(global.__notifRedis, session_id);
-    
             const mentionJid = isIndividu && billPhone ? toMentionJid(billPhone) : null;
     
             const msg = buildMessage(payload, bill, { mentionPhone: billPhone, contractNumber }); // opsional
-            const sent = await sendWithFallback({
+            const sent = await sendNotification({
                 to: group.chat_id,
                 message: msg,
                 mentions: mentionJid ? [mentionJid] : [],
+                requestId: `notif-${job.id}`,
             });
     
             return {

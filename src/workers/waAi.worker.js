@@ -5,14 +5,21 @@ import { aiConfig } from '../services/aiConfig.js';
 import { resolveAiScope } from '../services/aiScope.js';
 import { sendAiExports } from '../services/waAiExports.js';
 import { extractText, normalizePhone, isGroupChat } from '../services/parser.js';
+import { bawaSend, bawaGroup } from '../services/bawaClient.js';
 
 const config = aiConfig();
-for (const key of ['sessionId', 'tenant', 'secret', 'baseURL', 'token', 'agentURL', 'apiKey']) {
+for (const key of (config.provider === 'bawa'
+  ? ['sessionId', 'secret', 'baseURL', 'token', 'agentURL', 'apiKey']
+  : ['sessionId', 'tenant', 'secret', 'baseURL', 'token', 'agentURL', 'apiKey'])) {
   if (!config[key]) throw new Error(`Missing AI config: ${key}`);
 }
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function send(to, message, eventId) {
+  if (config.provider === 'bawa') {
+    return bawaSend({ baseURL: config.baseURL, instanceId: config.sessionId, token: config.token,
+      to, message, requestId: `ai-${eventId}` });
+  }
   await axios.post(`${config.baseURL}/api/external/whatsapp/command/send`, {
     session_id: config.sessionId, kind: 'text', to, message,
     request_id: `ai-${eventId}`,
@@ -23,10 +30,12 @@ async function mayAskInGroup(record, chatId, senderJid, isMaster) {
   if (String(record.izin_group || 'UMUM').toUpperCase() !== 'ADMIN') return true;
   if (isMaster) return true;
   const phone = normalizePhone(senderJid);
-  const response = await axios.post(`${config.baseURL}/api/external/whatsapp/command/group`,
-    { session_id: config.sessionId, group_id: chatId },
-    { headers: { Authorization: `Bearer ${config.token}`, 'X-Tenant': config.tenant }, timeout: 15000 });
-  return Array.isArray(response.data?.participants) && response.data.participants.some(participant => {
+  const data = config.provider === 'bawa'
+    ? await bawaGroup({ baseURL: config.baseURL, instanceId: config.sessionId, token: config.token, groupId: chatId })
+    : (await axios.post(`${config.baseURL}/api/external/whatsapp/command/group`,
+      { session_id: config.sessionId, group_id: chatId },
+      { headers: { Authorization: `Bearer ${config.token}`, 'X-Tenant': config.tenant }, timeout: 15000 })).data;
+  return Array.isArray(data?.participants) && data.participants.some(participant => {
     if (!participant.isAdmin && !participant.isSuperAdmin) return false;
     return [participant.id, participant.lid].some(id =>
       id === senderJid || (phone && normalizePhone(id) === phone));

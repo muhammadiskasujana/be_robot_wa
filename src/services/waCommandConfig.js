@@ -1,13 +1,13 @@
 export function commandConfig(env = process.env) {
     const provider = env.WA_COMMAND_PROVIDER || "greenapi";
-    if (!["greenapi", "baileys"].includes(provider)) throw new Error("Invalid WA_COMMAND_PROVIDER");
+    if (!["greenapi", "baileys", "bawa"].includes(provider)) throw new Error("Invalid WA_COMMAND_PROVIDER");
     const config = {
         provider,
-        baseURL: (env.WA_COMMAND_GATEWAY_BASE_URL || "").replace(/\/$/, ""),
-        token: env.WA_COMMAND_GATEWAY_TOKEN,
+        baseURL: (provider === "bawa" ? env.WA_COMMAND_BAWA_BASE_URL || "https://api-gateway.intelixstudio.tech" : env.WA_COMMAND_GATEWAY_BASE_URL || "").replace(/\/$/, ""),
+        token: provider === "bawa" ? env.WA_COMMAND_BAWA_TOKEN : env.WA_COMMAND_GATEWAY_TOKEN,
         tenant: env.WA_COMMAND_GATEWAY_TENANT,
-        sessionId: env.WA_COMMAND_GATEWAY_SESSION_ID,
-        secret: env.WA_COMMAND_GATEWAY_WEBHOOK_SECRET,
+        sessionId: provider === "bawa" ? env.WA_COMMAND_BAWA_INSTANCE_ID : env.WA_COMMAND_GATEWAY_SESSION_ID,
+        secret: provider === "bawa" ? env.WA_COMMAND_BAWA_WEBHOOK_SECRET : env.WA_COMMAND_GATEWAY_WEBHOOK_SECRET,
         shards: Number(env.WA_COMMAND_INBOUND_SHARDS || 4),
     };
     if (!Number.isInteger(config.shards) || config.shards < 1 || config.shards > 32) throw new Error("Invalid WA_COMMAND_INBOUND_SHARDS");
@@ -18,6 +18,14 @@ export function commandConfig(env = process.env) {
         // Existing notifSend worker has this dedicated session hardcoded. Do not change its routing.
         const notifSessions = ["b319ed90-2504-4589-abc7-162d8a449405", env.NOTIF_SESSIONS, env.TARIKAN_NOTIF_SESSIONS, env.WA_COMMAND_RESERVED_SESSIONS].filter(Boolean).join(",").split(",").map(s => s.trim());
         if (notifSessions.includes(config.sessionId)) throw new Error("Command session must differ from notification sessions");
+    }
+    if (provider === "bawa") {
+        for (const key of ["baseURL", "token", "sessionId", "secret"]) {
+            if (!config[key]) throw new Error(`Missing Bawa command config: ${key}`);
+        }
+        const reserved = [env.WA_AI_BAWA_INSTANCE_ID, env.NOTIF_BAWA_INSTANCE_ID, env.TARIKAN_NOTIF_BAWA_INSTANCE_ID]
+            .filter(Boolean);
+        if (reserved.includes(config.sessionId)) throw new Error("Command instance must differ from AI and notification instances");
     }
     return config;
 }
